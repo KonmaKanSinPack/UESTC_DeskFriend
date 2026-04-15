@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from xmlrpc import client
 
@@ -10,9 +11,10 @@ from io import BytesIO
 from httpcore import URL
 import pytesseract
 import requests
-from openai import OpenAI
+import qasync
+from openai import AsyncOpenAI
 import json
-from PetWindow import PetWindow
+import yaml
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QPushButton
 from PyQt5.QtCore import Qt, QPoint, QTimer 
 from PyQt5.QtGui import QPixmap
@@ -59,15 +61,15 @@ class Hutao(QWidget):
         self.label.setPixmap(pixmap)
         self.resize(pixmap.width(), pixmap.height()) #让窗口大小和图片匹配
 
-        self.frag_poision = QPoint()
+        self.drag_poision = QPoint()
 
         #llm调用部分
-        URL = ""
-        API_KEY= ""
+        with open("config.yaml", "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
         self.vision = Vision()
         self.context = deque(maxlen=5)
         self.cur_model = "gemini-2.5-pro"
-        self.client = OpenAI(api_key=API_KEY, base_url=URL)
+        self.client = AsyncOpenAI(api_key=config["API_KEY"], base_url=config["BASE_URL"])
         self.tools = [
             {
                 "type": "function",
@@ -83,13 +85,14 @@ class Hutao(QWidget):
         ]
     
     def on_timer_trick(self):
-        resp = self.get_response("请你调用工具看看我的屏幕")
-        print(resp.choices[0].message.content)
+        # resp = self.get_response("请你调用工具看看我的屏幕")
+        # print(resp.choices[0].message.content)
+        self.vision.sudden_view()
 
-    def get_response(self, message):
+    async def do_response(self, message):
         self.context.append({"role": "user", "content": message})
 
-        response = self.client.chat.completions.create(
+        response = await self.client.chat.completions.create(
                 model=self.cur_model,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant.中文回复"},
@@ -124,7 +127,7 @@ class Hutao(QWidget):
 
             tool_result = target_method(**args_dict)
 
-            # 3. 按照标准格式，把执行结果打包
+            # 按照标准格式，把执行结果打包
             self.context.append(resp_message) # 必须把军师的指令也存入历史记录
             self.context.append({
                 "role": "tool",
@@ -133,8 +136,8 @@ class Hutao(QWidget):
                 "content": tool_result # 把你的文字结果交给军师
             })
 
-            # 4. 第二次通信：带着结果回去要最终回复
-            response = self.client.chat.completions.create(
+            # 第二次通信：带着结果回去要最终回复
+            response = await self.client.chat.completions.create(
                 model=self.cur_model,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant.中文回复"},
@@ -146,26 +149,41 @@ class Hutao(QWidget):
             )
             resp_message = response.choices[0].message
             self.context.append({"role": "assistant", "content": resp_message.content})
-        return response
+        
+        print(resp_message.content)
 
     def look_at_screen(self):
         try:
-            #咔嚓！截取全屏
             screenshot = self.vision.sudden_view()
             
-
             screen_base64 = pil_image_to_base64(screenshot)
             
             img_msg = pack_msg("user", "image_url", f"data:image/png;base64,{screen_base64}")
             
             self.context.append(img_msg)
 
-            print(f"[本地小弟] 图像base64：\n{screen_base64[:100]}...") # 打印前100个字看看
+            print(f"图像base64：\n{screen_base64[:100]}...") # 打印前100个字看看
             return "已生成观察图片message并加入上下文。"
             
         except Exception as e:
-            print(f"[本地小弟] 识别失败：{e}")
+            print(f"识别失败：{e}")
             return "糟糕，本堂主的眼睛出了点问题，看不清屏幕了。"
+
+    def mouseDoubleClickEvent(self, event): #鼠标双击时
+        if event.button() == Qt.LeftButton:
+            print("接收到鼠标双击事件")
+            asyncio.create_task(self.do_response("用户刚刚通过鼠标触碰了你"))
+            event.accept()
+    
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.drag_poision = event.globalPos() - self.frameGeometry().topLeft() #以左上角为偏移点
+            event.accept()
+
+    def mouseMoveEvent(self, event): #鼠标拖动时
+        if event.buttons() == Qt.LeftButton:
+            self.move(event.globalPos() - self.drag_poision)
+            event.accept()
 
 def pack_msg(role, type, content):
     if type == "text":
@@ -175,9 +193,14 @@ def pack_msg(role, type, content):
 
 
 if __name__ == "__main__":
-    test = True
-
     app = QApplication(sys.argv)
+
+    loop = qasync.QEventLoop(app) #创建兼容PyQt的异步事件
+    asyncio.set_event_loop(loop) #设置异步事件循环
+
+
     hutao = Hutao()
     hutao.show()
-    sys.exit(app.exec_())
+    
+    while loop:
+        loop.run_forever()
