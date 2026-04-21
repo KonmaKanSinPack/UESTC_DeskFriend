@@ -63,7 +63,7 @@ class Vision: #AI的视觉模块
         self.history.append(screenshot)
         
     def sudden_view(self):
-        self.update(ImageGrab.grab())
+        self.update(ImageGrab.grab().resize((224, 224))) 
         return self.history[-1]
 
     async def look_at_screen(self):
@@ -331,6 +331,8 @@ class Hutao(QWidget):
                     print("判断需要回复，正在处理消息...")
                     await self.do_response(message)
                     # print(response.choices[0].message.content)
+                else:
+                    print("判断不需要回复，跳过这条消息。")
             except Exception as e:
                 print(f"处理消息时出错了：{e}")
             finally:
