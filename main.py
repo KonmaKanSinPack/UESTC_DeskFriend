@@ -1,7 +1,11 @@
 import asyncio
 import base64
 import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 from collections import deque
 from io import BytesIO
@@ -13,7 +17,7 @@ import tomllib
 import torch
 from faster_whisper import WhisperModel
 from openai import AsyncOpenAI
-from PIL import ImageGrab
+from PIL import Image, ImageGrab
 from PyQt5.QtCore import QObject, QPoint, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget
@@ -42,6 +46,31 @@ def pack_msg(role, type, content, tool_call=None):
         return {"role": "tool", "tool_call_id": tool_call.id, "name": tool_call.function.name, "content": content}
 
 
+def grab_screenshot():
+    """截一张全屏图，返回 PIL.Image。
+
+    Wayland 会话下 Pillow 的 ImageGrab 不可用，且 GNOME Shell 的私有
+    Screenshot D-Bus 接口对第三方应用返回 AccessDenied，因此走
+    gnome-screenshot 子进程；X11 会话直接用 ImageGrab。
+    """
+    is_wayland = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+    if is_wayland and shutil.which("gnome-screenshot"):
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        try:
+            subprocess.run(
+                ["gnome-screenshot", "-f", tmp.name],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+            with Image.open(tmp.name) as img:
+                return img.copy()
+        finally:
+            os.unlink(tmp.name)
+    return ImageGrab.grab()
+
+
 class Vision:  # AI的视觉模块
     def __init__(self, history_length=5):
         self.history = deque(maxlen=history_length)
@@ -50,7 +79,7 @@ class Vision:  # AI的视觉模块
         self.history.append(screenshot)
 
     def sudden_view(self):
-        self.update(ImageGrab.grab().resize((224, 224)))
+        self.update(grab_screenshot().resize((224, 224)))
         return self.history[-1]
 
     async def look_at_screen(self):
@@ -108,7 +137,9 @@ class Listen(QObject):
 
     def during_listening(self):
         silence_timeout = 0
-        MAX_SILENCE = 20
+        # 每块 512 帧 @16kHz ≈ 32ms
+        MAX_SILENCE = 45  # 连续静音约 1.5 秒视为说完
+        MAX_CHUNKS = 470  # 最长录音约 15 秒，防止缓冲无限增长
         while True:
             # 首先需要完成一个字节流-》numpy-》tensor的转换
             voice_buffer = []
@@ -120,7 +151,7 @@ class Listen(QObject):
             if score >= 0.5:
                 print("检测到声音了，开始录音...")
                 voice_buffer.append(raw_bytes)
-                while silence_timeout < MAX_SILENCE:
+                while silence_timeout < MAX_SILENCE and len(voice_buffer) < MAX_CHUNKS:
                     raw_bytes, _overflowed = self.stream.read(self.CHUNK)
                     audio_data = np.frombuffer(raw_bytes, dtype=np.int16).copy()
                     tensor_chunk = torch.from_numpy(audio_data).float() / 32768.0
@@ -142,7 +173,8 @@ class Listen(QObject):
                 # 把 complete_audio_bytes 交给 Whisper 转写
                 segments, info = self.whisper_model.transcribe(complele_audio_np, beam_size=5, language="zh")
                 transed_text = "".join([segment.text for segment in segments])
-                self.get_voice_text(transed_text)
+                if transed_text.strip():
+                    self.get_voice_text(transed_text)
                 silence_timeout = 0
 
 

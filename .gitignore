@@ -1,5 +1,4 @@
 .history
-config.yaml
 config.toml
 __pycache__
 .venv
