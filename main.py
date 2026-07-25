@@ -9,8 +9,8 @@ from io import BytesIO
 import numpy as np
 import qasync
 import sounddevice as sd
+import tomllib
 import torch
-import yaml
 from faster_whisper import WhisperModel
 from openai import AsyncOpenAI
 from PIL import ImageGrab
@@ -148,8 +148,8 @@ class Listen(QObject):
 
 class Brain:
     def __init__(self):
-        with open("config.yaml", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
+        with open("config.toml", "rb") as f:
+            config = tomllib.load(f)
 
         self.context = deque(maxlen=5)
         self.cur_model = "gemini-2.5-pro"
