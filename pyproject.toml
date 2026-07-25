@@ -1,0 +1,31 @@
+[project]
+name = "uestc-deskfriend"
+version = "0.1.0"
+description = "桌面 AI 伙伴（桌宠）：语音交互 + 屏幕视觉 + LLM 对话"
+requires-python = ">=3.10"
+dependencies = [
+    "pyqt5>=5.15",
+    "qasync>=0.27",
+    "openai>=1.0",
+    "faster-whisper>=1.0",
+    "torch>=2.0",
+    "numpy>=1.24",
+    "pillow>=10.0",
+    "sounddevice>=0.5",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.uv]
+package = false
