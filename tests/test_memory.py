@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from brain import Brain
+from brain import MAX_FACTS, Brain, parse_fact_ops
 from memory import KEEP_RECENT_TURNS, MAX_CONTEXT_TURNS, MemoryStore, render_messages, sanitize_message
 
 
@@ -85,18 +85,17 @@ class TestSanitize:
         assert "糯糯: 你在写代码" in text
 
 
-class _StubCompletions:
-    """假 LLM:固定回复一句话，无工具调用。"""
+class _StubClient:
+    """假 LLM:固定回复 self.reply（测试中可随时改），无工具调用。"""
+
+    def __init__(self, reply="好的"):
+        self.reply = reply
+        self.chat = SimpleNamespace(completions=self)
 
     async def create(self, model, messages, **kwargs):
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(role="assistant", content="好的", tool_calls=None))]
+            choices=[SimpleNamespace(message=SimpleNamespace(role="assistant", content=self.reply, tool_calls=None))]
         )
-
-
-class _StubClient:
-    def __init__(self):
-        self.chat = SimpleNamespace(completions=_StubCompletions())
 
 
 @pytest.fixture()
@@ -165,3 +164,103 @@ class TestBrainMemory:
         assert contents == ["[背景谈话，无需回应] 背景谈话一句", "糯糯你在吗", "好的"]
         # 背景记忆占独立轮次，后续回复开启新一轮
         assert brain.memory.unsummarized_turn_count() == 2
+
+
+class TestFacts:
+    def test_facts_crud(self, store):
+        store.add_fact("用户在 UESTC 读书")
+        store.add_fact("用户讨厌香菜")
+        facts = store.get_facts()
+        assert [c for _, c in facts] == ["用户在 UESTC 读书", "用户讨厌香菜"]
+        store.update_fact(facts[1][0], "用户不吃香菜")
+        store.delete_fact(facts[0][0])
+        assert store.get_facts() == [(facts[1][0], "用户不吃香菜")]
+
+    def test_meta_roundtrip(self, store):
+        assert store.get_meta("k") is None
+        store.set_meta("k", "1")
+        store.set_meta("k", "2")
+        assert store.get_meta("k") == "2"
+
+    def test_get_turns_since_limit(self, store):
+        for turn in range(1, 6):
+            store.add_message(turn, _user_msg(f"第{turn}轮"))
+        turn_ids, msgs = store.get_turns_since(2, limit=2)
+        assert turn_ids == [4, 5]
+        assert [m["content"] for m in msgs] == ["第4轮", "第5轮"]
+
+    def test_parse_fact_ops(self):
+        assert parse_fact_ops('{"operations": [{"op": "add", "content": "a"}]}') == [{"op": "add", "content": "a"}]
+        assert parse_fact_ops('```json\n{"operations": []}\n```') == []
+        assert parse_fact_ops("这不是json") == []
+        assert parse_fact_ops('{"operations": "not a list"}') == []
+        assert parse_fact_ops('{"operations": [{"op": "add"}, "junk", null]}') == [{"op": "add"}]
+
+    def test_extract_adds_fact_and_advances_cursor(self, brain):
+        brain.client.reply = '{"operations": [{"op": "add", "content": "用户在 UESTC 读书"}]}'
+
+        async def run():
+            await brain.get_llm_response("我在 UESTC 读书")
+            await brain.maybe_extract_facts()
+            # 没有新轮次时不重复抽取、不重复落库
+            await brain.maybe_extract_facts()
+
+        asyncio.run(run())
+        assert [c for _, c in brain.memory.get_facts()] == ["用户在 UESTC 读书"]
+        assert brain.memory.get_meta("last_extracted_turn") == str(brain.turn_id)
+
+    def test_extract_bad_output_discarded(self, brain):
+        brain.client.reply = "胡说八道"
+
+        async def run():
+            await brain.get_llm_response("你好")
+            await brain.maybe_extract_facts()
+
+        asyncio.run(run())
+        assert brain.memory.get_facts() == []
+        # 游标照常推进，不会反复重试同一批
+        assert brain.memory.get_meta("last_extracted_turn") == str(brain.turn_id)
+
+    def test_extract_covers_memorized_turns(self, brain):
+        brain.memorize("我下周三要交实验报告")
+        brain.client.reply = '{"operations": [{"op": "add", "content": "用户下周三要交实验报告"}]}'
+
+        async def run():
+            await brain.get_llm_response("糯糯你在吗")
+            await brain.maybe_extract_facts()
+
+        asyncio.run(run())
+        assert [c for _, c in brain.memory.get_facts()] == ["用户下周三要交实验报告"]
+
+    def test_apply_fact_ops_validation(self, brain):
+        brain.memory.add_fact("旧事实")
+        fid = brain.memory.get_facts()[0][0]
+        brain._apply_fact_ops(
+            [
+                {"op": "update", "id": fid, "content": "新事实"},
+                {"op": "update", "id": 999, "content": "不存在的 id"},
+                {"op": "add", "content": "   "},
+                {"op": "delete", "id": fid},
+                {"op": "unknown"},
+            ]
+        )
+        assert brain.memory.get_facts() == []
+
+    def test_facts_injected_into_messages(self, brain):
+        brain.memory.add_fact("用户叫小明")
+        messages = brain._build_messages()
+        assert any("用户叫小明" in m["content"] for m in messages[:2])
+
+    def test_merge_facts_over_limit(self, brain):
+        for i in range(MAX_FACTS + 1):
+            brain.memory.add_fact(f"事实{i}")
+        brain.client.reply = '["合并事实1", "合并事实2"]'
+        asyncio.run(brain._maybe_merge_facts())
+        assert [c for _, c in brain.memory.get_facts()] == ["合并事实1", "合并事实2"]
+
+    def test_merge_bad_output_keeps_original(self, brain):
+        for i in range(MAX_FACTS + 1):
+            brain.memory.add_fact(f"事实{i}")
+        brain.client.reply = "不是json"
+        asyncio.run(brain._maybe_merge_facts())
+        assert len(brain.memory.get_facts()) == MAX_FACTS + 1

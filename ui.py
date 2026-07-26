@@ -142,6 +142,8 @@ class DeskFriend(QWidget):
         self.show_bubble(resp_message.content)
         # 回复已展示，再后台做记忆压缩（超限时把最老轮次并入摘要，失败不影响对话）
         await self.brain.maybe_compress()
+        # 批量抽取自上次以来的事实（含此前攒下的背景谈话，失败不影响对话）
+        await self.brain.maybe_extract_facts()
 
     def show_bubble(self, text, timeout_ms=10000):
         """显示气泡，timeout_ms 后自动隐藏。"""

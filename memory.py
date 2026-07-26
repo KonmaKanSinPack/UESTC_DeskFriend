@@ -65,6 +65,16 @@ class MemoryStore:
                 content TEXT NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
 
@@ -122,3 +132,64 @@ class MemoryStore:
             (content, time.time()),
         )
         self.conn.commit()
+
+    # ---- 事实型长期记忆（facts）----
+
+    def get_facts(self):
+        """返回 [(id, content), ...]，按写入顺序。"""
+        return self.conn.execute("SELECT id, content FROM facts ORDER BY id").fetchall()
+
+    def add_fact(self, content):
+        now = time.time()
+        self.conn.execute(
+            "INSERT INTO facts (content, created_at, updated_at) VALUES (?, ?, ?)",
+            (content, now, now),
+        )
+        self.conn.commit()
+
+    def update_fact(self, fact_id, content):
+        self.conn.execute(
+            "UPDATE facts SET content = ?, updated_at = ? WHERE id = ?",
+            (content, time.time(), fact_id),
+        )
+        self.conn.commit()
+
+    def delete_fact(self, fact_id):
+        self.conn.execute("DELETE FROM facts WHERE id = ?", (fact_id,))
+        self.conn.commit()
+
+    def replace_facts(self, contents):
+        """整体替换 facts 表（用于超上限时的 LLM 合并压缩）。"""
+        now = time.time()
+        self.conn.execute("DELETE FROM facts")
+        self.conn.executemany(
+            "INSERT INTO facts (content, created_at, updated_at) VALUES (?, ?, ?)",
+            [(c, now, now) for c in contents],
+        )
+        self.conn.commit()
+
+    # ---- 抽取进度记录（meta）----
+
+    def get_meta(self, key, default=None):
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def set_meta(self, key, value):
+        self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+        self.conn.commit()
+
+    def get_turns_since(self, turn_id, limit):
+        """返回 turn_id 之后最近 limit 轮的 (turn_ids, msgs)，用于批量事实抽取。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT turn_id FROM messages WHERE turn_id > ? ORDER BY turn_id DESC LIMIT ?",
+            (turn_id, limit),
+        ).fetchall()
+        turn_ids = sorted(r[0] for r in rows)
+        if not turn_ids:
+            return [], []
+        placeholders = ",".join("?" * len(turn_ids))
+        rows = self.conn.execute(
+            f"SELECT msg_json FROM messages WHERE turn_id IN ({placeholders}) ORDER BY id",
+            turn_ids,
+        ).fetchall()
+        return turn_ids, [json.loads(r[0]) for r in rows]

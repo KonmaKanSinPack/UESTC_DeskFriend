@@ -43,6 +43,43 @@ SUMMARY_SYSTEM_PROMPT = (
     "用中文，200 字以内，直接输出摘要正文，不要任何前缀或解释。"
 )
 
+# 事实抽取：每次回复后处理自上次抽取以来的全部轮次（含背景谈话）
+FACT_EXTRACTION_MAX_TURNS = 20
+# facts 条数上限，超过后由 LLM 合并压缩到 MERGED_FACTS_TARGET 条
+MAX_FACTS = 50
+MERGED_FACTS_TARGET = 30
+
+FACT_EXTRACTION_SYSTEM_PROMPT = (
+    "你是桌宠的记忆提取助手。从对话中抽取值得长期记住的关于用户的事实"
+    "（身份、学校、偏好、计划、重要事件、与别人提到的约定等，包括标注为背景谈话的内容）。"
+    "规则：只记有长期价值的事实，不记寒暄和一次性内容；"
+    "已存在的事实不要重复添加；内容变化时用 update 更新，失效时用 delete 删除；"
+    "每条事实是一句简短中文陈述。"
+    '输出纯 JSON：{"operations": [{"op": "add", "content": "..."}, '
+    '{"op": "update", "id": 1, "content": "..."}, {"op": "delete", "id": 2}]}，'
+    '没有要操作的内容时输出 {"operations": []}。不要输出任何其他文字。'
+)
+
+FACT_MERGE_SYSTEM_PROMPT = (
+    "你是记忆整理助手。把以下关于用户的事实列表合并压缩，"
+    "去掉重复、合并相近条目，保留全部有效信息。"
+    "输出纯 JSON 字符串数组，不要输出任何其他文字。"
+)
+
+
+def parse_fact_ops(raw):
+    """解析事实抽取 LLM 输出的 JSON 操作列表，任何异常都兜底为空列表。"""
+    try:
+        text = raw.strip()
+        if text.startswith("```"):
+            # 去掉 markdown 代码围栏
+            text = text.strip("`").removeprefix("json").strip()
+        data = json.loads(text)
+        ops = data.get("operations") if isinstance(data, dict) else None
+        return [op for op in ops if isinstance(op, dict)] if isinstance(ops, list) else []
+    except Exception:
+        return []
+
 
 class Brain:
     def __init__(self, client=None, db_path=None):
@@ -81,6 +118,10 @@ class Brain:
 
     def _build_messages(self):
         messages = [{"role": "system", "content": self.system_prompt}]
+        facts = self.memory.get_facts()
+        if facts:
+            lines = "\n".join(f"{i}. {content}" for i, (_, content) in enumerate(facts, 1))
+            messages.append({"role": "system", "content": f"以下是你记住的关于用户的事情：\n{lines}"})
         if self.summary:
             messages.append({"role": "system", "content": f"以下是你和用户此前对话的摘要：\n{self.summary}"})
         messages += self.context
@@ -160,6 +201,76 @@ class Brain:
             print(f"记忆压缩：{len(turn_ids)} 个旧轮次已并入摘要")
         except Exception as e:
             print(f"记忆压缩失败：{e}")
+
+    async def maybe_extract_facts(self):
+        """处理自上次抽取以来的全部轮次（含背景谈话），让 LLM 输出事实操作并落库。
+
+        只在回复完成后调用：背景消息攒着，下次用户搭话时一并批量抽取，
+        避免每条背景消息都花一次 LLM 调用。自身吞掉异常，绝不影响对话。
+        """
+        try:
+            last = int(self.memory.get_meta("last_extracted_turn", "0"))
+            turn_ids, msgs = self.memory.get_turns_since(last, FACT_EXTRACTION_MAX_TURNS)
+            if not turn_ids:
+                return
+            facts = self.memory.get_facts()
+            facts_text = "\n".join(f"{fid}. {content}" for fid, content in facts) or "（无）"
+            extract_context = [
+                {"role": "system", "content": FACT_EXTRACTION_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"已有事实：\n{facts_text}\n\n最近对话：\n{render_messages(msgs)}\n\n请输出操作 JSON。",
+                },
+            ]
+            response = await self.get_response_with_context(extract_context)
+            # 已成功拿到响应即推进游标：坏输出丢弃本批，避免反复重试同一批轮次
+            self.memory.set_meta("last_extracted_turn", str(max(turn_ids)))
+            ops = parse_fact_ops(response.choices[0].message.content or "")
+            if ops:
+                self._apply_fact_ops(ops)
+                print(f"事实抽取：应用 {len(ops)} 条操作")
+            await self._maybe_merge_facts()
+        except Exception as e:
+            print(f"事实抽取失败：{e}")
+
+    def _apply_fact_ops(self, ops):
+        existing_ids = {fid for fid, _ in self.memory.get_facts()}
+        for op in ops:
+            action = op.get("op")
+            content = op.get("content")
+            fact_id = op.get("id")
+            if action == "add" and isinstance(content, str) and content.strip():
+                self.memory.add_fact(content.strip())
+            elif action == "update" and fact_id in existing_ids and isinstance(content, str) and content.strip():
+                self.memory.update_fact(fact_id, content.strip())
+            elif action == "delete" and fact_id in existing_ids:
+                self.memory.delete_fact(fact_id)
+
+    async def _maybe_merge_facts(self):
+        """facts 超上限时让 LLM 合并压缩；坏输出不落库，原表不动。"""
+        facts = self.memory.get_facts()
+        if len(facts) <= MAX_FACTS:
+            return
+        merge_context = [
+            {"role": "system", "content": FACT_MERGE_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"请把以下 {len(facts)} 条事实合并到不超过 {MERGED_FACTS_TARGET} 条：\n"
+                    + "\n".join(content for _, content in facts)
+                ),
+            },
+        ]
+        response = await self.get_response_with_context(merge_context)
+        try:
+            merged = json.loads((response.choices[0].message.content or "").strip().strip("`").removeprefix("json"))
+        except Exception:
+            return
+        if isinstance(merged, list):
+            contents = [c.strip() for c in merged if isinstance(c, str) and c.strip()]
+            if contents:
+                self.memory.replace_facts(contents)
+                print(f"事实合并：{len(facts)} 条压缩为 {len(contents)} 条")
 
     async def get_response_with_context(self, context, model=None, use_tools=False):
         if model is None:
