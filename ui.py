@@ -1,10 +1,11 @@
 import asyncio
+import math
 from pathlib import Path
 
 import qasync
 from PyQt5.QtCore import QPoint, Qt, QTimer
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from brain import Brain, pack_msg, parse_tool_args
 from listen import Listen
@@ -41,19 +42,39 @@ class DeskFriend(QWidget):
         )
         self.bubble.hide()
 
+        # 文字输入框：单击桌宠唤起，回车发送，Esc 收起
+        self.input_box = QLineEdit(self)
+        self.input_box.setPlaceholderText("和糯糯说点什么…")
+        self.input_box.setMaximumWidth(280)
+        self.input_box.hide()
+        self.input_box.returnPressed.connect(self.on_input_submitted)
+        self.input_box.installEventFilter(self)
+
         # 气泡自动隐藏定时器
         self.bubble_timer = QTimer(self)
         self.bubble_timer.setSingleShot(True)
         self.bubble_timer.timeout.connect(self.hide_bubble)
 
-        # 垂直布局：气泡在上，贴图在下；气泡隐藏时窗口收缩到贴图大小
+        # 垂直布局：气泡、输入框在上，贴图在下；都隐藏时窗口收缩到贴图大小
         layout = QVBoxLayout(self)
         layout.addWidget(self.bubble, alignment=Qt.AlignHCenter)
+        layout.addWidget(self.input_box, alignment=Qt.AlignHCenter)
         layout.addWidget(self.label, alignment=Qt.AlignHCenter)
         layout.setContentsMargins(0, 0, 0, 0)
         self.adjustSize()
 
         self.drag_poision = QPoint()
+
+        # 程序动画：整窗微动模拟待机呼吸/思考晃动/说话弹跳
+        self._anim_state = "idle"  # idle / thinking / talking
+        self._anim_phase = 0.0
+        self._base_pos = None  # 动画的基准位置（拖动结束后更新）
+        self._dragging = False
+        self._press_pos = QPoint()  # 按下时的全局坐标，用于区分单击与拖动
+        self._just_double_clicked = False
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._anim_tick)
+        self.anim_timer.start(40)  # 25fps
 
         # 器官部分
         self.brain = Brain()
@@ -90,6 +111,7 @@ class DeskFriend(QWidget):
             resp_message = response.choices[0].message
 
         print(resp_message.content)
+        self._anim_state = "talking"
         self.show_bubble(resp_message.content)
 
     def show_bubble(self, text, timeout_ms=10000):
@@ -103,6 +125,46 @@ class DeskFriend(QWidget):
         self.bubble.hide()
         self.bubble_timer.stop()
         self.adjustSize()
+        self._anim_state = "idle"
+
+    def _anim_tick(self):
+        """整窗微动动画。拖动中不动，避免和用户抢窗口位置。"""
+        if self._dragging:
+            return
+        if self._base_pos is None:
+            self._base_pos = self.pos()
+            return
+        self._anim_phase += 0.12
+        if self._anim_state == "thinking":
+            offset = QPoint(round(3 * math.sin(self._anim_phase * 4)), 0)  # 快速晃动
+        elif self._anim_state == "talking":
+            offset = QPoint(0, -abs(round(4 * math.sin(self._anim_phase * 2))))  # 弹跳
+        else:
+            offset = QPoint(0, round(2 * math.sin(self._anim_phase)))  # 缓慢呼吸
+        self.move(self._base_pos + offset)
+
+    def on_input_submitted(self):
+        text = self.input_box.text().strip()
+        self.input_box.clear()
+        self.input_box.hide()
+        self.adjustSize()
+        if not text:
+            return
+        print(f"接收到文字消息：{text}")
+        try:
+            self.message_queue.put_nowait(text)
+            self.show_bubble("听到了，正在想…", timeout_ms=60000)
+            self._anim_state = "thinking"
+        except asyncio.QueueFull:
+            print("消息队列已满，丢弃这条消息。")
+
+    def eventFilter(self, obj, event):
+        # 输入框里按 Esc 收起
+        if obj is self.input_box and event.type() == event.KeyPress and event.key() == Qt.Key_Escape:
+            self.input_box.hide()
+            self.adjustSize()
+            return True
+        return super().eventFilter(obj, event)
 
     async def tool_executer(self, tool_call):
         # target_method = getattr(self, tool_call.function.name)
@@ -146,6 +208,7 @@ class DeskFriend(QWidget):
         try:
             self.message_queue.put_nowait(text)  # 忙碌时也入队，等消费者空闲后处理
             self.show_bubble("听到了，正在想…", timeout_ms=60000)
+            self._anim_state = "thinking"
         except asyncio.QueueFull:
             print("消息队列已满，丢弃这条消息。")
 
@@ -187,15 +250,35 @@ class DeskFriend(QWidget):
     def mouseDoubleClickEvent(self, event):  # 鼠标双击时
         if event.button() == Qt.LeftButton:
             print("接收到鼠标双击事件")
+            self._just_double_clicked = True  # 防止双击被误判成两次单击
             self.message_queue.put_nowait("用户用鼠标触碰了你")
             event.accept()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self._dragging = True
+            self._press_pos = event.globalPos()
             self.drag_poision = event.globalPos() - self.frameGeometry().topLeft()  # 以左上角为偏移点
             event.accept()
 
     def mouseMoveEvent(self, event):  # 鼠标拖动时
-        if event.buttons() == Qt.LeftButton:
+        if self._dragging and event.buttons() == Qt.LeftButton:
             self.move(event.globalPos() - self.drag_poision)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._dragging:
+            self._dragging = False
+            self._base_pos = self.pos()  # 动画基准跟随新位置
+            # 几乎没移动视为单击：唤起/收起文字输入框
+            if (event.globalPos() - self._press_pos).manhattanLength() < 6:
+                if self._just_double_clicked:
+                    self._just_double_clicked = False
+                elif self.input_box.isVisible():
+                    self.input_box.hide()
+                    self.adjustSize()
+                else:
+                    self.input_box.show()
+                    self.input_box.setFocus()
+                    self.adjustSize()
             event.accept()
