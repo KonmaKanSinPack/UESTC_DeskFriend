@@ -67,7 +67,8 @@ class Hutao(QWidget):
         self.is_busy = False
 
         # 消息队列-》使用生产者-消费者结构实现
-        self.message_queue = asyncio.Queue()
+        # 带上限：积压超过 20 条时丢弃新消息，防止无限积压
+        self.message_queue = asyncio.Queue(maxsize=20)
         # 创建一个后台任务，专门负责消费消息队列里的消息
         asyncio.get_event_loop().create_task(self.on_received_message_consumer())
 
@@ -135,11 +136,11 @@ class Hutao(QWidget):
     @qasync.asyncSlot(str)
     async def on_heard_text(self, text):
         print(f"接收到听觉消息：{text}")
-        if not self.is_busy:
-            await self.message_queue.put(text)  # 把消息放到队列里，等着消费者去处理
+        try:
+            self.message_queue.put_nowait(text)  # 忙碌时也入队，等消费者空闲后处理
             self.show_bubble("听到了，正在想…", timeout_ms=60000)
-        else:
-            print("当前忙碌，暂时无法处理新的消息。")
+        except asyncio.QueueFull:
+            print("消息队列已满，丢弃这条消息。")
 
     # async def on_received_message_producer(self, message):
     #     self.messsage_queue.put(message)
@@ -147,6 +148,13 @@ class Hutao(QWidget):
     async def on_received_message_consumer(self):
         while True:
             message = await self.message_queue.get()  # 当队列为空时就会永远停留在这一行
+            # 把忙碌期间积压的消息一并取出合并（多为连续的语音片段）
+            pending = [message]
+            while not self.message_queue.empty():
+                pending.append(self.message_queue.get_nowait())
+            if len(pending) > 1:
+                message = "\n".join(pending)
+                print(f"合并了 {len(pending)} 条积压消息")
             self.is_busy = True
             try:
                 print(f"正在处理消息：{message}")
