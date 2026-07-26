@@ -25,14 +25,40 @@ def encode_image_to_base64_by_path(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
+_pw_capture = "uninit"  # PipeWire 后端惰性单例："uninit" 未碰过 / None 不可用 / 实例
+
+
+def _get_pw_capture():
+    """拿到 PipeWire 静默截屏后端；仅 Wayland 且系统装有 gi/GStreamer 时可用。"""
+    global _pw_capture
+    if _pw_capture != "uninit":
+        return _pw_capture
+    _pw_capture = None
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        try:
+            from pw_capture import PipeWireCapture
+
+            _pw_capture = PipeWireCapture()
+        except Exception:
+            pass  # 缺 gi / GStreamer 时安静回退到 gnome-screenshot
+    return _pw_capture
+
+
 def grab_screenshot():
     """截一张全屏图，返回 PIL.Image。
 
-    Wayland 会话下 Pillow 的 ImageGrab 不可用，且 GNOME Shell 的私有
-    Screenshot D-Bus 接口对第三方应用返回 AccessDenied，因此走
-    gnome-screenshot 子进程；X11 会话直接用 ImageGrab。
+    Wayland 会话下优先走 PipeWire 后端（ScreenCast 门户授权一次后完全静默）；
+    后端未就绪或抓帧失败时回退 gnome-screenshot 子进程（有闪光灯效），
+    因为 GNOME Shell 的私有 Screenshot D-Bus 接口对第三方返回 AccessDenied；
+    X11 会话直接用 ImageGrab。
     """
     is_wayland = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+    if is_wayland:
+        backend = _get_pw_capture()
+        if backend is not None:
+            image = backend.grab()
+            if image is not None:
+                return image
     if is_wayland and shutil.which("gnome-screenshot"):
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         tmp.close()

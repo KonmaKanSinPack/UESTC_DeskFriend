@@ -1,5 +1,6 @@
 .history
 config.toml
+pw_restore_token
 __pycache__
 .venv
 ruff_cache
