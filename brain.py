@@ -71,16 +71,20 @@ class Brain:
         # resp_message = response.choices[0].message
         return response
 
-    async def get_response_with_context(self, context, model=None):
+    async def get_response_with_context(self, context, model=None, use_tools=False):
         if model is None:
             model = self.cur_model
+        kwargs = {}
+        if use_tools:
+            # 判定类调用（如 should_reply）不能带 tools：
+            # 模型可能直接发起工具调用而不输出文本，导致判定落空
+            kwargs = {"tools": self.tools, "tool_choice": "auto"}
         response = await self.client.chat.completions.create(
             model=model,
             messages=context,
             # 设置 reasoning_split=True 将思考内容分离到 reasoning_details 字段
             extra_body={"reasoning_split": True},
-            tools=self.tools,
-            tool_choice="auto",
+            **kwargs,
         )
         # resp_message = response.choices[0].message
         return response

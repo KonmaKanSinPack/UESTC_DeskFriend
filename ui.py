@@ -117,15 +117,17 @@ class Hutao(QWidget):
             judge_msg = pack_msg(
                 "system",
                 "text",
-                "你是一个聪明的助手，负责判断用户的消息是否需要回复。"
-                "如果需要回复，回复true；如果不需要回复，回复false。",
+                "你是桌宠的消息过滤器，判断用户的话是否需要桌宠回应。"
+                "规则：直接对桌宠说的提问、指令（如「看看我的屏幕」「今天天气怎么样」）一律回应 true；"
+                "只有明显与桌宠无关的背景谈话、无意义碎片才回应 false。只输出 true 或 false。",
             )
             user_msg = pack_msg("user", "text", f"用户的消息是：{message}")
             judge_context = [judge_msg, user_msg]
 
             response = await self.brain.get_response_with_context(judge_context)
 
-            reply_decision = response.choices[0].message.content.strip().lower()
+            content = response.choices[0].message.content or ""
+            reply_decision = content.strip().lower()
             return reply_decision == "true"
         except Exception as e:
             print(f"判断是否回复时出错了：{e}")

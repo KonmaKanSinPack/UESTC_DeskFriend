@@ -167,6 +167,7 @@ class PipeWireCapture:
             fd = self._open_pipewire_remote()
             self._build_pipeline(fd, node_id)
             self._ok = True
+            print("PipeWire 静默截屏已启用")
             self._finish()
         except Exception as e:
             print(f"PipeWire 截屏初始化失败：{e}")
