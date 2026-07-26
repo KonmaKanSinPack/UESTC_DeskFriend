@@ -45,10 +45,11 @@ def _get_pw_capture():
 
 
 def grab_screenshot():
-    """截一张全屏图，返回 PIL.Image。
+    """截一张全屏图，返回 PIL.Image；PipeWire 初始化窗口期返回 None 表示跳过本次。
 
     Wayland 会话下优先走 PipeWire 后端（ScreenCast 门户授权一次后完全静默）；
-    后端未就绪或抓帧失败时回退 gnome-screenshot 子进程（有闪光灯效），
+    初始化未完成或抓帧失败时跳过本次（返回 None），绝不回退到有闪光灯效的
+    gnome-screenshot；只有后端确认不可用（初始化失败）才回退 gnome-screenshot，
     因为 GNOME Shell 的私有 Screenshot D-Bus 接口对第三方返回 AccessDenied；
     X11 会话直接用 ImageGrab。
     """
@@ -56,9 +57,15 @@ def grab_screenshot():
     if is_wayland:
         backend = _get_pw_capture()
         if backend is not None:
+            backend.start()  # 触发惰性初始化（幂等）
+            if backend.pending:
+                return None  # 初始化窗口期：跳过本次，不闪白光
             image = backend.grab()
             if image is not None:
                 return image
+            if backend.ok:
+                return None  # 已就绪但抓帧失败：同样跳过本次
+            # 初始化失败：继续往下回退 gnome-screenshot
     if is_wayland and shutil.which("gnome-screenshot"):
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         tmp.close()
@@ -84,12 +91,17 @@ class Vision:  # AI的视觉模块
         self.history.append(screenshot)
 
     def sudden_view(self):
-        self.update(grab_screenshot().resize((224, 224)))
+        shot = grab_screenshot()
+        if shot is None:
+            return None  # 截屏后端未就绪，跳过本次
+        self.update(shot.resize((224, 224)))
         return self.history[-1]
 
     async def look_at_screen(self):
         try:
             screenshot = self.sudden_view()
+            if screenshot is None:
+                return "眼睛还没准备好（截屏后端初始化中），请稍后再让我看一次。"
             screen_base64 = pil_image_to_base64(screenshot)
             img_msg = pack_msg("user", "image_url", f"data:image/png;base64,{screen_base64}")
 

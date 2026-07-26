@@ -57,7 +57,17 @@ class PipeWireCapture:
         self._started = True
         threading.Thread(target=self._init_worker, name="pw-capture-init", daemon=True).start()
 
-    def grab(self, init_wait=3.0):
+    @property
+    def pending(self):
+        """初始化流程未结束（含尚未开始、等待用户授权）。"""
+        return not self._init_done.is_set()
+
+    @property
+    def ok(self):
+        """初始化成功、随时可抓帧。"""
+        return self._ok
+
+    def grab(self, init_wait=0.0):
         """抓一帧屏幕内容，返回 PIL.Image；后端未就绪或抓帧失败返回 None。"""
         try:
             self.start()
