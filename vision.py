@@ -107,4 +107,4 @@ class Vision:  # AI的视觉模块
 
         except Exception as e:
             print(f"识别失败：{e}")
-            return "糟糕，本堂主的眼睛出了点问题，看不清屏幕了。"
+            return "糟糕，我的眼睛出了点问题，看不清屏幕了。"

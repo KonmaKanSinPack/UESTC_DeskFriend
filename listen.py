@@ -66,7 +66,13 @@ class Listen(QObject):
         else:
             device, compute_type = "cpu", "int8"
         print(f"Whisper 推理设备：{device} ({compute_type})")
-        self.whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
+        try:
+            # 优先离线加载本地缓存：在线模式即使模型已缓存也会先连 HF 校验，
+            # 网络不通时会卡死在 TCP 连接上
+            self.whisper_model = WhisperModel("small", device=device, compute_type=compute_type, local_files_only=True)
+        except Exception:
+            print("本地未找到 Whisper 模型缓存，转为在线下载...")
+            self.whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
 
         self.start_threading()
 

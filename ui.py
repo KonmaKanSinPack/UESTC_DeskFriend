@@ -11,7 +11,7 @@ from listen import Listen
 from vision import Vision
 
 
-class Hutao(QWidget):
+class DeskFriend(QWidget):
     def __init__(self):
         super().__init__()
         """
@@ -27,7 +27,7 @@ class Hutao(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)  # 设置透明背景
 
         self.label = QLabel(self)
-        pixmap = QPixmap(str(Path(__file__).parent / "assets" / "hutao.jpg"))
+        pixmap = QPixmap(str(Path(__file__).parent / "assets" / "nuonuo.png"))
         pixmap = pixmap.scaledToWidth(150, Qt.SmoothTransformation)
         self.label.setPixmap(pixmap)
 
