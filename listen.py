@@ -21,17 +21,19 @@ class SileroVadOnnx:
         onnx_path = Path(__file__).parent / "assets" / "silero_vad.onnx"
         self.session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
         self.sr = np.array(sample_rate, dtype=np.int64)
+        # v5 模型要求在每块音频前拼接上一块的末尾作为上下文（16kHz 为 64 采样点）
+        self.context_size = 64 if sample_rate == 16000 else 32
         self.reset()
 
     def reset(self):
         self.state = np.zeros((2, 1, 128), dtype=np.float32)
+        self.context = np.zeros((1, self.context_size), dtype=np.float32)
 
     def __call__(self, chunk_f32):
         """chunk_f32: (512,) 的 float32 音频块，返回语音概率。"""
-        out, self.state = self.session.run(
-            None,
-            {"input": chunk_f32[None, :], "state": self.state, "sr": self.sr},
-        )
+        x = np.concatenate([self.context, chunk_f32[None, :]], axis=1)
+        out, self.state = self.session.run(None, {"input": x, "state": self.state, "sr": self.sr})
+        self.context = x[:, -self.context_size :]
         return float(out[0, 0])
 
 

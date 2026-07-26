@@ -15,3 +15,4 @@ def test_vad_reset_restores_state():
     vad(chunk)  # 状态被推进
     vad.reset()
     assert np.all(vad.state == 0)
+    assert np.all(vad.context == 0)
