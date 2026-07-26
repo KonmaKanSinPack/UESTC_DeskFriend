@@ -67,8 +67,13 @@ class PipeWireCapture:
         """初始化成功、随时可抓帧。"""
         return self._ok
 
-    def grab(self, init_wait=0.0):
-        """抓一帧屏幕内容，返回 PIL.Image；后端未就绪或抓帧失败返回 None。"""
+    def grab(self, init_wait=3.0):
+        """抓一帧屏幕内容，返回 PIL.Image；后端未就绪或抓帧失败返回 None。
+
+        init_wait：最多等初始化完成的秒数。正常冷启动（token 已存在）只需
+        零点几秒；若是在等用户点授权框则会超时返回 None，由上层跳过本次。
+        不能让 UI 线程无限等授权，所以必须有界。
+        """
         try:
             self.start()
             if not self._init_done.wait(timeout=init_wait) or not self._ok:

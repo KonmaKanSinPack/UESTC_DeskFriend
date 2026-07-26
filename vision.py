@@ -58,13 +58,11 @@ def grab_screenshot():
         backend = _get_pw_capture()
         if backend is not None:
             backend.start()  # 触发惰性初始化（幂等）
-            if backend.pending:
-                return None  # 初始化窗口期：跳过本次，不闪白光
-            image = backend.grab()
+            image = backend.grab()  # 有限等待初始化完成（默认 3s）
             if image is not None:
                 return image
-            if backend.ok:
-                return None  # 已就绪但抓帧失败：同样跳过本次
+            if backend.pending or backend.ok:
+                return None  # 初始化超期（多半在等授权）或抓帧失败：跳过本次，不闪白光
             # 初始化失败：继续往下回退 gnome-screenshot
     if is_wayland and shutil.which("gnome-screenshot"):
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
