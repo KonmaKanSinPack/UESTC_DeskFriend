@@ -140,6 +140,8 @@ class DeskFriend(QWidget):
         print(resp_message.content)
         self._anim_state = "talking"
         self.show_bubble(resp_message.content)
+        # 回复已展示，再后台做记忆压缩（超限时把最老轮次并入摘要，失败不影响对话）
+        await self.brain.maybe_compress()
 
     def show_bubble(self, text, timeout_ms=10000):
         """显示气泡，timeout_ms 后自动隐藏。"""
@@ -260,7 +262,9 @@ class DeskFriend(QWidget):
                     await self.do_response(message)
                     # print(response.choices[0].message.content)
                 else:
-                    print("判断不需要回复，跳过这条消息。")
+                    print("判断不需要回复，仅记入记忆。")
+                    self.brain.memorize(message)  # 背景谈话只记不答
+                    await self.brain.maybe_compress()  # 跳过回复的消息也要参与压缩
                     self.hide_bubble()
             except Exception as e:
                 print(f"处理消息时出错了：{e}")
