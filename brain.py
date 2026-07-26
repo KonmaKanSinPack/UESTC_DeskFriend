@@ -50,8 +50,15 @@ class Brain:
     async def get_llm_response(self, message, model=None):
         """
         message和response_msg都会直接存入context。
+        message 可以是 str（普通用户消息），也可以是已打包好的 dict（如 tool 结果消息），
+        或 dict 列表（需要按序追加多条消息时）。
         """
-        self.context.append({"role": "user", "content": message})
+        if isinstance(message, list):
+            self.context.extend(message)
+        elif isinstance(message, dict):
+            self.context.append(message)
+        else:
+            self.context.append({"role": "user", "content": message})
         if model is None:
             model = self.cur_model
 
@@ -66,9 +73,12 @@ class Brain:
             tools=self.tools,
             tool_choice="auto",
         )
-        response_msg = {"role": response.choices[0].message.role, "content": response.choices[0].message.content}
+        resp_msg = response.choices[0].message
+        response_msg = {"role": resp_msg.role, "content": resp_msg.content}
+        if resp_msg.tool_calls:
+            # tool_calls 必须保留，否则后续 tool 角色消息找不到对应调用，API 返回 400
+            response_msg["tool_calls"] = [tc.model_dump() for tc in resp_msg.tool_calls]
         self.context.append(response_msg)
-        # resp_message = response.choices[0].message
         return response
 
     async def get_response_with_context(self, context, model=None, use_tools=False):

@@ -78,13 +78,15 @@ class Hutao(QWidget):
         while resp_message.tool_calls:
             tool_call = resp_message.tool_calls[0]
             print(f"接收到军师指令，准备运行: {tool_call.function.name}")
-            tool_result = await self.tool_executer(tool_call)
+            tool_result, extra_msg = await self.tool_executer(tool_call)
 
-            # 按照标准格式，把执行结果打包
+            # 按照标准格式，把执行结果打包；tool 消息必须紧跟 assistant 的 tool_calls，
+            # 截图等附加消息放在 tool 之后，否则 API 判定 role 序列非法返回 400
             tool_msg = pack_msg("tool", "tool", tool_result, tool_call)
+            msgs = [tool_msg] + ([extra_msg] if extra_msg else [])
 
             # 第二次通信：带着结果回去要最终回复
-            response = await self.brain.get_llm_response(tool_msg)
+            response = await self.brain.get_llm_response(msgs)
             resp_message = response.choices[0].message
 
         print(resp_message.content)
@@ -108,9 +110,12 @@ class Hutao(QWidget):
         _args_dict = parse_tool_args(tool_call.function.arguments)  # 目前工具都无参数，解析以备后续扩展
 
         if func_name == "look_at_screen":
-            img_msg = await self.vision.look_at_screen()
-            self.brain.context.append(img_msg)
-            return "已查看屏幕并将图片信息加入上下文了哦"
+            result = await self.vision.look_at_screen()
+            if isinstance(result, dict):
+                # 成功：图片消息由 do_response 按序插入 context（tool 消息之后）
+                return "已查看屏幕并将图片信息加入上下文了哦", result
+            # 失败/未就绪：返回的是提示文本，直接作为工具结果
+            return result, None
 
     async def should_reply(self, message):
         try:
