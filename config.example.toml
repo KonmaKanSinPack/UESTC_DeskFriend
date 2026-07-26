@@ -4,3 +4,6 @@ BASE_URL = "https://api.example.com/v1"
 
 # 可选：自定义系统提示词（人设）。不填则使用内置的糯糯人设。
 # SYSTEM_PROMPT = "你是糯糯，一只Q版弗洛洛毛绒玩偶形态的桌面AI伙伴……"
+
+# 可选：桌宠贴图路径（相对项目目录或绝对路径），支持静态图与 GIF 动图。
+# SPRITE = "assets/nuonuo.png"

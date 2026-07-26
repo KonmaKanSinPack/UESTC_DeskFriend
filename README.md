@@ -39,6 +39,7 @@ uv sync
 cp config.example.toml config.toml
 # 编辑 config.toml，填入 API_KEY 和 BASE_URL
 # 可选：SYSTEM_PROMPT 自定义系统提示词（人设），不填用内置糯糯人设
+# 可选：SPRITE 自定义贴图路径，支持 GIF 动图（默认 assets/nuonuo.png）
 ```
 
 ### 模型

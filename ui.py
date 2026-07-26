@@ -3,13 +3,22 @@ import math
 from pathlib import Path
 
 import qasync
-from PyQt5.QtCore import QPoint, Qt, QTimer
-from PyQt5.QtGui import QPixmap
+import tomllib
+from PyQt5.QtCore import QPoint, QSize, Qt, QTimer
+from PyQt5.QtGui import QMovie, QPixmap
 from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from brain import Brain, pack_msg, parse_tool_args
 from listen import Listen
 from vision import Vision
+
+PROJECT_DIR = Path(__file__).parent
+SPRITE_WIDTH = 150  # 贴图统一缩放到这个宽度
+
+
+def load_config():
+    with open(PROJECT_DIR / "config.toml", "rb") as f:
+        return tomllib.load(f)
 
 
 class DeskFriend(QWidget):
@@ -28,9 +37,7 @@ class DeskFriend(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)  # 设置透明背景
 
         self.label = QLabel(self)
-        pixmap = QPixmap(str(Path(__file__).parent / "assets" / "nuonuo.png"))
-        pixmap = pixmap.scaledToWidth(150, Qt.SmoothTransformation)
-        self.label.setPixmap(pixmap)
+        self._load_sprite()
 
         # 气泡：显示回复文本，平时隐藏
         self.bubble = QLabel(self)
@@ -92,6 +99,26 @@ class DeskFriend(QWidget):
         self.message_queue = asyncio.Queue(maxsize=20)
         # 创建一个后台任务，专门负责消费消息队列里的消息
         asyncio.get_event_loop().create_task(self.on_received_message_consumer())
+
+    def _load_sprite(self):
+        """从 config.toml 的 SPRITE 加载贴图，支持静态图与 GIF 动图。"""
+        sprite = load_config().get("SPRITE", "assets/nuonuo.png")
+        sprite_path = Path(sprite)
+        if not sprite_path.is_absolute():
+            sprite_path = PROJECT_DIR / sprite_path
+
+        if sprite_path.suffix.lower() == ".gif":
+            self.movie = QMovie(str(sprite_path))
+            self.movie.jumpToFrame(0)  # 先取一帧拿到原始尺寸，按比例算缩放
+            frame_size = self.movie.currentImage().size()
+            scaled = QSize(SPRITE_WIDTH, round(SPRITE_WIDTH * frame_size.height() / frame_size.width()))
+            self.movie.setScaledSize(scaled)
+            self.label.setMovie(self.movie)
+            self.movie.start()
+        else:
+            pixmap = QPixmap(str(sprite_path))
+            pixmap = pixmap.scaledToWidth(SPRITE_WIDTH, Qt.SmoothTransformation)
+            self.label.setPixmap(pixmap)
 
     async def do_response(self, message):
         response = await self.brain.get_llm_response(message)
