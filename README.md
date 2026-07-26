@@ -38,6 +38,7 @@ uv sync
 ```bash
 cp config.example.toml config.toml
 # 编辑 config.toml，填入 API_KEY 和 BASE_URL
+# 可选：SYSTEM_PROMPT 自定义系统提示词（人设），不填用内置糯糯人设
 ```
 
 ### 模型

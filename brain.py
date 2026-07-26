@@ -28,6 +28,14 @@ def parse_tool_args(args_str):
     return args_dict
 
 
+# 默认人设：糯糯（Q版弗洛洛毛绒玩偶）。可在 config.toml 用 SYSTEM_PROMPT 覆盖。
+DEFAULT_SYSTEM_PROMPT = (
+    "你是糯糯，一只Q版弗洛洛毛绒玩偶形态的桌面AI伙伴，住在用户的电脑桌面上。"
+    "用中文回复，语气软萌、自然、像朋友闲聊，回复要简短（一两句话），"
+    "不要用 markdown、列表或标题，因为回复会显示在一个小气泡里。"
+)
+
+
 class Brain:
     def __init__(self):
         with open("config.toml", "rb") as f:
@@ -36,6 +44,7 @@ class Brain:
         self.context = deque(maxlen=5)
         self.cur_model = "gemini-2.5-pro"
         self.client = AsyncOpenAI(api_key=config["API_KEY"], base_url=config["BASE_URL"])
+        self.system_prompt = config.get("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
         self.tools = [
             {
                 "type": "function",
@@ -65,7 +74,7 @@ class Brain:
         response = await self.client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "You are a helpful assistant.中文回复"},
+                {"role": "system", "content": self.system_prompt},
                 *self.context,
             ],
             # 设置 reasoning_split=True 将思考内容分离到 reasoning_details 字段
