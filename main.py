@@ -3,24 +3,27 @@ import base64
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 from collections import deque
 from io import BytesIO
+from pathlib import Path
 
+import ctranslate2
 import numpy as np
+import onnxruntime as ort
 import qasync
 import sounddevice as sd
 import tomllib
-import torch
 from faster_whisper import WhisperModel
 from openai import AsyncOpenAI
 from PIL import Image, ImageGrab
 from PyQt5.QtCore import QObject, QPoint, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget
+from PyQt5.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
 
 def pil_image_to_base64(pil_image):
@@ -95,6 +98,31 @@ class Vision:  # AI的视觉模块
             return "糟糕，本堂主的眼睛出了点问题，看不清屏幕了。"
 
 
+class SileroVadOnnx:
+    """直接调用 silero_vad.onnx 打分，不依赖 torch。
+
+    模型文件内置在 assets/ 下（来自 silero-vad 官方包，MIT 协议），
+    运行时无需联网下载。每次调用维护隐状态 state，分段录音前应 reset()。
+    """
+
+    def __init__(self, sample_rate=16000):
+        onnx_path = Path(__file__).parent / "assets" / "silero_vad.onnx"
+        self.session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+        self.sr = np.array(sample_rate, dtype=np.int64)
+        self.reset()
+
+    def reset(self):
+        self.state = np.zeros((2, 1, 128), dtype=np.float32)
+
+    def __call__(self, chunk_f32):
+        """chunk_f32: (512,) 的 float32 音频块，返回语音概率。"""
+        out, self.state = self.session.run(
+            None,
+            {"input": chunk_f32[None, :], "state": self.state, "sr": self.sr},
+        )
+        return float(out[0, 0])
+
+
 class Listen(QObject):
     text_signal = pyqtSignal(str)  # 只是信号通道，不是消息缓存。
 
@@ -115,14 +143,16 @@ class Listen(QObject):
         )
         self.stream.start()
 
-        # 从 PyTorch Hub 自动加载 Silero VAD
-        self.model, utils = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad", model="silero_vad", force_reload=False, onnx=False, trust_repo=True
-        )
-        self.get_speech_timestamps = utils[0]  # 获取处理工具
+        # 加载 Silero VAD（ONNX 本地模型，无需 torch、无需联网下载）
+        self.vad = SileroVadOnnx(self.SAMPLE_RATE)
 
-        # 加载whisper
-        self.whisper_model = WhisperModel("small", device="cuda", compute_type="float16")
+        # 加载whisper：有 CUDA 用 GPU，否则回退 CPU int8
+        if ctranslate2.get_cuda_device_count() > 0:
+            device, compute_type = "cuda", "float16"
+        else:
+            device, compute_type = "cpu", "int8"
+        print(f"Whisper 推理设备：{device} ({compute_type})")
+        self.whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
 
         self.start_threading()
 
@@ -141,23 +171,21 @@ class Listen(QObject):
         MAX_SILENCE = 45  # 连续静音约 1.5 秒视为说完
         MAX_CHUNKS = 470  # 最长录音约 15 秒，防止缓冲无限增长
         while True:
-            # 首先需要完成一个字节流-》numpy-》tensor的转换
             voice_buffer = []
             raw_bytes, _overflowed = self.stream.read(self.CHUNK)
-            audio_data = np.frombuffer(raw_bytes, dtype=np.int16).copy()
-            tensor_chunk = torch.from_numpy(audio_data).float() / 32768.0
+            audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
             # 模型打分
-            score = self.model(tensor_chunk, self.SAMPLE_RATE).item()
+            score = self.vad(audio_f32)
             if score >= 0.5:
                 print("检测到声音了，开始录音...")
+                self.vad.reset()  # 每段录音前重置 VAD 状态
                 voice_buffer.append(raw_bytes)
                 while silence_timeout < MAX_SILENCE and len(voice_buffer) < MAX_CHUNKS:
                     raw_bytes, _overflowed = self.stream.read(self.CHUNK)
-                    audio_data = np.frombuffer(raw_bytes, dtype=np.int16).copy()
-                    tensor_chunk = torch.from_numpy(audio_data).float() / 32768.0
+                    audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
                     # 模型打分
-                    score = self.model(tensor_chunk, self.SAMPLE_RATE).item()
+                    score = self.vad(audio_f32)
 
                     if score < 0.5:
                         silence_timeout += 1
@@ -255,7 +283,28 @@ class Hutao(QWidget):
         pixmap = QPixmap("hutao.jpg")
         pixmap = pixmap.scaledToWidth(150, Qt.SmoothTransformation)
         self.label.setPixmap(pixmap)
-        self.resize(pixmap.width(), pixmap.height())  # 让窗口大小和图片匹配
+
+        # 气泡：显示回复文本，平时隐藏
+        self.bubble = QLabel(self)
+        self.bubble.setWordWrap(True)
+        self.bubble.setMaximumWidth(280)
+        self.bubble.setStyleSheet(
+            "QLabel { background-color: rgba(255, 255, 255, 230);"
+            " border: 2px solid #e88; border-radius: 10px; padding: 8px; }"
+        )
+        self.bubble.hide()
+
+        # 气泡自动隐藏定时器
+        self.bubble_timer = QTimer(self)
+        self.bubble_timer.setSingleShot(True)
+        self.bubble_timer.timeout.connect(self.hide_bubble)
+
+        # 垂直布局：气泡在上，贴图在下；气泡隐藏时窗口收缩到贴图大小
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.bubble, alignment=Qt.AlignHCenter)
+        layout.addWidget(self.label, alignment=Qt.AlignHCenter)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.adjustSize()
 
         self.drag_poision = QPoint()
 
@@ -291,6 +340,19 @@ class Hutao(QWidget):
             resp_message = response.choices[0].message
 
         print(resp_message.content)
+        self.show_bubble(resp_message.content)
+
+    def show_bubble(self, text, timeout_ms=10000):
+        """显示气泡，timeout_ms 后自动隐藏。"""
+        self.bubble.setText(text)
+        self.bubble.show()
+        self.adjustSize()
+        self.bubble_timer.start(timeout_ms)
+
+    def hide_bubble(self):
+        self.bubble.hide()
+        self.bubble_timer.stop()
+        self.adjustSize()
 
     async def tool_executer(self, tool_call):
         # target_method = getattr(self, tool_call.function.name)
@@ -337,6 +399,7 @@ class Hutao(QWidget):
         print(f"接收到听觉消息：{text}")
         if not self.is_busy:
             await self.message_queue.put(text)  # 把消息放到队列里，等着消费者去处理
+            self.show_bubble("听到了，正在想…", timeout_ms=60000)
         else:
             print("当前忙碌，暂时无法处理新的消息。")
 
@@ -355,8 +418,10 @@ class Hutao(QWidget):
                     # print(response.choices[0].message.content)
                 else:
                     print("判断不需要回复，跳过这条消息。")
+                    self.hide_bubble()
             except Exception as e:
                 print(f"处理消息时出错了：{e}")
+                self.hide_bubble()
             finally:
                 self.is_busy = False
                 # self.message_queue.task_done()  # 和 join 成对出现。当前队列没有调用 join，暂不启用。
@@ -384,6 +449,10 @@ class Hutao(QWidget):
 
 
 if __name__ == "__main__":
+    # Qt 事件循环不返回 Python 解释器，SIGINT 的 Python 处理器永远得不到执行，
+    # 表现为 Ctrl+C 无法退出。改用默认动作，让内核直接终止进程。
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
     app = QApplication(sys.argv)
 
     loop = qasync.QEventLoop(app)  # 创建兼容PyQt的异步事件
@@ -392,5 +461,5 @@ if __name__ == "__main__":
     hutao = Hutao()
     hutao.show()
 
-    while loop:
+    with loop:
         loop.run_forever()

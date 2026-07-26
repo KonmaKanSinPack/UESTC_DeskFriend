@@ -8,10 +8,10 @@ dependencies = [
     "qasync>=0.27",
     "openai>=1.0",
     "faster-whisper>=1.0",
-    "torch>=2.0",
     "numpy>=1.24",
     "pillow>=10.0",
-    "sounddevice>=0.5",  # Linux 下需系统运行库 libportaudio2
+    "sounddevice>=0.5",
+    "onnxruntime>=1.24.3",
 ]
 
 [dependency-groups]
