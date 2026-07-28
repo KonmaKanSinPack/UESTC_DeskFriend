@@ -1,3 +1,9 @@
 .history
-config.yaml
+config.toml
+pw_restore_token
 __pycache__
+.venv
+ruff_cache
+.ruff_cache
+.pytest_cache
+pet.db
