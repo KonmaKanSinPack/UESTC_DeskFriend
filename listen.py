@@ -21,12 +21,18 @@ class SileroVadOnnx:
         onnx_path = Path(__file__).parent / "assets" / "silero_vad.onnx"
         self.session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
         self.sr = np.array(sample_rate, dtype=np.int64)
+
+        # ---- 从模型元数据推导 state 的 shape ----
+        # 模型输出 [2, None, 128]；None 是动态 batch 维度，推理时固定为 1
+        state_meta = next(i for i in self.session.get_inputs() if i.name == "state")
+        self._state_shape = tuple(d if isinstance(d, int) else 1 for d in state_meta.shape)
+
         # v5 模型要求在每块音频前拼接上一块的末尾作为上下文（16kHz 为 64 采样点）
         self.context_size = 64 if sample_rate == 16000 else 32
         self.reset()
 
     def reset(self):
-        self.state = np.zeros((2, 1, 128), dtype=np.float32)
+        self.state = np.zeros(self._state_shape, dtype=np.float32)
         self.context = np.zeros((1, self.context_size), dtype=np.float32)
 
     def __call__(self, chunk_f32):
@@ -117,9 +123,9 @@ class Listen(QObject):
 
                 print("录音结束，正在转写...")
                 complete_audio_bytes = b"".join(voice_buffer)
-                complele_audio_np = np.frombuffer(complete_audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                complete_audio_np = np.frombuffer(complete_audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                 # 把 complete_audio_bytes 交给 Whisper 转写
-                segments, info = self.whisper_model.transcribe(complele_audio_np, beam_size=5, language="zh")
+                segments, info = self.whisper_model.transcribe(complete_audio_np, beam_size=5, language="zh")
                 transed_text = "".join([segment.text for segment in segments])
                 if transed_text.strip():
                     self.get_voice_text(transed_text)

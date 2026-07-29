@@ -3,6 +3,7 @@ config.toml
 pw_restore_token
 __pycache__
 .venv
+.claude
 ruff_cache
 .ruff_cache
 .pytest_cache
