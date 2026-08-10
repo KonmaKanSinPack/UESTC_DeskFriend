@@ -2,7 +2,7 @@
 name = "uestc-deskfriend"
 version = "0.1.0"
 description = "桌面 AI 伙伴（桌宠）：语音交互 + 屏幕视觉 + LLM 对话"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "pyqt5>=5.15",
     # pyqt5-qt5 5.15.11 起只发 linux/mac wheel，Windows 无法安装；
@@ -32,6 +32,17 @@ dependencies = [
     "omegaconf>=2.3.1",
     "hydra-core>=1.3.5",
     "openai-whisper>=20250625",
+    "diffusers>=0.39.0",
+    "lightning>=2.6.5",
+    "einops>=0.8.2",
+    "loguru>=0.7.3",
+    "typer>=0.27.1",
+    "rootutils>=1.0.7",
+    "gdown>=6.1.0",
+    "rich>=15.0.0",
+    "matplotlib>=3.11.1",
+    "wget>=3.2",
+    "pyarrow>=25.0.1",
 ]
 
 [dependency-groups]
@@ -46,6 +57,9 @@ line-length = 120
 
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/cu128"
+# 只从该 index 取 torch/torchaudio，其余包一律走 PyPI
+# （否则 uv 默认只用第一个含某包的 index，pytorch 上旧版 tqdm 会阻断解析）
+include = ["torch", "torchaudio"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP"]

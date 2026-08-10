@@ -22,11 +22,31 @@ logger = logging.getLogger(__name__)
 COSYVOICE2_HF_REPO = "FunAudioLLM/CosyVoice2-0.5B"
 DEFAULT_MODEL_DIR = "assets/models/CosyVoice2-0.5B"
 COSYVOICE2_SAMPLE_RATE = 22050  # CosyVoice2 输出采样率
+# 就绪判定：这些关键文件齐全才算模型完整（下载中断时目录非空但可能缺文件）
+COSYVOICE2_REQUIRED_FILES = ("flow.pt", "hift.pt", "CosyVoice-BlankEN/model.safetensors")
 
 
 def _split_sentences(text):
     """按中文句末标点切句（保留标点）。逐句合成播放 = 句粒度打断进度。"""
     return [s for s in re.split(r"(?<=[。！？!?；;])", text) if s.strip()]
+
+
+def _load_wav_soundfile(wav, target_sr, min_sr=16000):
+    """替代 CosyVoice 的 load_wav：soundfile + librosa 实现。
+
+    签名与官方一致（返回单值 speech，形状 (1, N) float32）——注意不是元组，
+    曾因返回 (speech, sr) 导致 frontend 拿到 tuple 报 min() TypeError。
+    替换原因：torchaudio 2.9+ 移除 soundfile 后端，torchcodec 无 Windows wheel，
+    官方 load_wav 在 Windows 必挂。
+    """
+    import librosa
+    import soundfile as sf
+    import torch
+
+    speech, sample_rate = sf.read(wav, dtype="float32")
+    if sample_rate != target_sr:
+        speech = librosa.resample(speech, orig_sr=sample_rate, target_sr=target_sr)
+    return torch.from_numpy(speech).unsqueeze(0)
 
 
 def ensure_cosyvoice_model(model_dir=None):
@@ -37,8 +57,9 @@ def ensure_cosyvoice_model(model_dir=None):
     返回模型目录 Path。
     """
     path = Path(model_dir or DEFAULT_MODEL_DIR)
-    if path.is_dir() and any(path.iterdir()):
-        return path  # 已有模型：离线可用
+    # 完整性检查：关键文件齐全才算就绪（下载中断时目录非空但缺文件，必须补下）
+    if all((path / f).exists() for f in COSYVOICE2_REQUIRED_FILES):
+        return path  # 已有完整模型：离线可用
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
@@ -151,13 +172,19 @@ class CosyVoice2TTS(TTS):
             raise RuntimeError("CosyVoice2 零样本克隆需要配置 TTS_VOICE_REF 与 TTS_VOICE_REF_TEXT")
         import sys
 
+        # CosyVoice 本体 + third_party 子模块（Matcha-TTS 是其组件，非 PyPI 包）
         sys.path.insert(0, str(Path(__file__).parent / "CosyVoice"))
+        sys.path.insert(0, str(Path(__file__).parent / "CosyVoice" / "third_party" / "Matcha-TTS"))
+        from cosyvoice.cli import frontend as cosy_frontend
         from cosyvoice.cli.cosyvoice import CosyVoice2
-        from cosyvoice.utils.file_utils import load_wav
+
+        # Windows 兼容：CosyVoice 的 load_wav 用 torchaudio(backend=soundfile)，
+        # 而 torchaudio 2.9+ 移除了该后端（强制 torchcodec，且 torchcodec 无 Windows
+        # wheel）——把 frontend 内部的 load_wav 替换为 soundfile+librosa 实现
+        cosy_frontend.load_wav = _load_wav_soundfile
 
         logger.warning("加载 CosyVoice2 模型（首次约 10~20s）…")
         self._model = CosyVoice2(self.model_dir, load_jit=False, load_trt=False, fp16=True)
-        self._prompt_speech = load_wav(self.voice_ref, 16000)
         logger.warning("CosyVoice2 就绪（音色参考：%s）", self.voice_ref)
 
     async def speak(self, text: str) -> None:
@@ -181,7 +208,7 @@ class CosyVoice2TTS(TTS):
         for sentence in _split_sentences(text):
             if self._stop_event.is_set():
                 break
-            for chunk in self._model.inference_zero_shot(sentence, self.voice_ref_text, self._prompt_speech):
+            for chunk in self._model.inference_zero_shot(sentence, self.voice_ref_text, self.voice_ref):
                 if self._stop_event.is_set():
                     break
                 audio = chunk["tts_speech"].cpu().numpy().flatten()

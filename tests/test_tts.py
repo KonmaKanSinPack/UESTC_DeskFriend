@@ -75,9 +75,23 @@ class TestSplitSentences:
 
 class TestEnsureModel:
     def test_skips_download_when_model_exists(self, tmp_path):
-        (tmp_path / "model.pt").touch()
+        for rel in ("flow.pt", "hift.pt", "CosyVoice-BlankEN/model.safetensors"):
+            f = tmp_path / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.touch()
         result = ensure_cosyvoice_model(str(tmp_path))
         assert result == tmp_path  # 不触发下载
+
+    def test_downloads_when_dir_nonempty_but_incomplete(self, tmp_path, monkeypatch):
+        """下载中断场景：目录非空但缺关键文件 → 必须补下（曾踩坑：只查非空就跳过）。"""
+        (tmp_path / "flow.pt").touch()  # 只有部分文件
+        calls = []
+        monkeypatch.setattr(
+            "huggingface_hub.snapshot_download",
+            lambda repo_id, local_dir: calls.append((repo_id, local_dir)),
+        )
+        ensure_cosyvoice_model(str(tmp_path))
+        assert calls == [(COSYVOICE2_HF_REPO, str(tmp_path))]
 
     def test_downloads_when_missing(self, tmp_path, monkeypatch):
         calls = []
