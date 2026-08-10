@@ -12,8 +12,33 @@
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# CosyVoice2 模型：HuggingFace 仓库与默认本地目录
+COSYVOICE2_HF_REPO = "FunAudioLLM/CosyVoice2-0.5B"
+DEFAULT_MODEL_DIR = "assets/models/CosyVoice2-0.5B"
+
+
+def ensure_cosyvoice_model(model_dir=None):
+    """CosyVoice2 模型不存在时自动下载（huggingface_hub）。
+
+    先例：faster-whisper 的"离线优先，本地无缓存才在线下载"（listen.py:69）；
+    网络不佳时设 HF_ENDPOINT=https://hf-mirror.com 走镜像（README 已有说明）。
+    返回模型目录 Path。
+    """
+    path = Path(model_dir or DEFAULT_MODEL_DIR)
+    if path.is_dir() and any(path.iterdir()):
+        return path  # 已有模型：离线可用
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        logger.warning("缺少 huggingface_hub，无法自动下载 CosyVoice2 模型（faster-whisper 依赖已自带）")
+        return path
+    logger.warning("CosyVoice2 模型不存在，开始自动下载（约 2GB）…%s", COSYVOICE2_HF_REPO)
+    snapshot_download(repo_id=COSYVOICE2_HF_REPO, local_dir=str(path))
+    return path
 
 
 class TTS(ABC):
@@ -98,7 +123,8 @@ class CosyVoice2TTS(TTS):
     """
 
     def __init__(self, model_dir: str = "", voice_ref: str = "", voice_ref_text: str = ""):
-        self.model_dir = model_dir
+        # 模型不存在自动下载（huggingface_hub，尊重 HF_ENDPOINT 镜像）；同步阻塞，下载时可见进度
+        self.model_dir = str(ensure_cosyvoice_model(model_dir))
         self.voice_ref = voice_ref
         self.voice_ref_text = voice_ref_text
         self._busy = False
