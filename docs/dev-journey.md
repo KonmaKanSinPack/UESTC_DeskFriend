@@ -311,10 +311,14 @@ def sanitize_message(msg):
 # brain.py:181-200
 summary_context = [
     {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
-    {"role": "user", "content": (
-        f"已有摘要：\n{self.summary or '（无）'}\n\n"
-        f"需要并入的新对话：\n{render_messages(old_msgs)}\n\n"
-        "请输出更新后的完整摘要。")},
+    {
+        "role": "user",
+        "content": (
+            f"已有摘要：\n{self.summary or '（无）'}\n\n"
+            f"需要并入的新对话：\n{render_messages(old_msgs)}\n\n"
+            "请输出更新后的完整摘要。"
+        ),
+    },
 ]
 response = await self.get_response_with_context(summary_context)
 new_summary = (response.choices[0].message.content or "").strip()
@@ -348,9 +352,13 @@ def memorize(self, message):
 
 ```python
 # 输出格式（brain.py:58-60）
-{"operations": [{"op": "add", "content": "..."},
-                {"op": "update", "id": 1, "content": "..."},
-                {"op": "delete", "id": 2}]}
+{
+    "operations": [
+        {"op": "add", "content": "..."},
+        {"op": "update", "id": 1, "content": "..."},
+        {"op": "delete", "id": 2},
+    ]
+}
 ```
 
 **LLM 输出不可信，必须校验落库**：add 要求非空 content，update/delete 要求 id 真实存在，其余一律忽略：

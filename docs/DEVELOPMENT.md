@@ -1,6 +1,6 @@
 # UESTC_DeskFriend 开发文档
 
-> 桌面 AI 伙伴（桌宠）项目。形象为糯糯（Q版弗洛洛），具备听觉（语音识别）、视觉（截屏理解）、对话（LLM + tool calling）能力。
+> 桌面 AI 伙伴（桌宠）项目。形象为糯糯（Q版弗洛洛），具备听觉（语音识别）、视觉（截屏理解）、对话（可插拔回复后端）能力。
 > 本文档定义当前阶段的总体开发任务，作为后续迭代的基准。
 
 ## 1. 现状盘点
@@ -40,7 +40,12 @@
 5. **模块拆分**：按器官划分（`brain` / `vision` / `listen` / `ui`），`main.py` 只做装配。
 6. **依赖管理用 uv**（`pyproject.toml` + `uv.lock`，Python 固定 3.12），**代码规范用 ruff**（lint + format，`line-length = 120`）。
 7. **音频采集用 sounddevice**，替代 pyaudio，消除编译期依赖（portaudio 头文件）；Linux 下仍需系统运行库 `libportaudio2`（wheel 不捆绑 Linux 二进制）。
-8. **记忆系统自建，不引入外部框架**（曾评估合并 AstrBot，结论：单机单用户场景不需要 IM 机器人框架，且记忆是桌宠体验的核心，应自研可控）。记忆模块为独立 `memory.py`，存储用 stdlib `sqlite3` 单文件（`pet.db`），不引入 ORM、不引入向量数据库。
+8. **回复后端可插拔，双实现由配置选择**（2026-08-10 更新，替代"不引入 AstrBot"旧结论）：
+   - `brain.py` 只保留统一契约（`ReplyBackend` 抽象 + `BackendResponse` 响应对象），按 `config.toml` 的 `BACKEND` 键经工厂装配：
+     - `astrbot`（默认）：走 OneBot 11 伪装通道接入 AstrBot 的桃桃，对话/记忆/人格由 AstrBot 接管，桌宠侧记忆为空操作
+     - `openai`：直连 OpenAI 兼容接口 + 自建记忆系统（原方案，保留作对照与回退）
+   - 自建记忆模块 `memory.py` 仍存在，服务 openai 后端：stdlib `sqlite3` 单文件（`pet.db`），不引入 ORM、不引入向量数据库。
+   - 曾评估过的"自定义 AstrBot 平台适配器插件"（AstrBot ≥4.16 支持）列为阶段四候选，届时可消灭 OneBot 协议的静默窗口 hack 并支持流式回复。
 9. **遗忘策略 = 轮次截断 + LLM 增量摘要**：超出轮次上限的老历史不硬丢，由 LLM 滚动生成摘要注入上下文（上下文 = system + facts + 摘要 + 最近 N 轮）。
 10. **长期记忆用事实表 + LLM 抽取**：`facts` 表存结构化事实（如"用户在 UESTC 读书"），抽取/去重/更新/删除全部交给 LLM 输出 JSON 操作完成，不写自研相似度去重；facts 量小，全量注入 system prompt，不做检索。
 11. **语义检索走降级路线**：优先 SQLite FTS5 关键词检索（内置、零依赖）；embedding top-k 仅列为远期候选（端点支持则用 API，否则本地小模型），不在初期目标内。
@@ -108,6 +113,55 @@
 
 - Rust 重写
 - 多平台（Windows/macOS）适配
-- 引入外部 Agent 框架（如 AstrBot）：记忆系统自研，见技术决策 8
 - 向量数据库 / embedding 检索（仅 Phase 7 远期候选）
 - TTS 语音合成（可列为远期候选）
+
+> 注：原"引入外部 Agent 框架（如 AstrBot）"一项已随技术决策 8 的更新而取消——AstrBot 现在是默认回复后端。
+
+## 7. AstrBot 接入（C方案，2026-08-10）
+
+### 7.1 目标与路线
+
+把桌宠的"脑子"从"自己调 LLM"换成可插拔后端：`astrbot`（默认，走 OneBot 11 伪装通道接入 AstrBot 的桃桃，记忆/人格由 AstrBot 全局记忆接管）与 `openai`（原直连 LLM + 自建记忆，保留作对照与回退）。
+
+**技术路线**：桌宠伪装成一个"OneBot 实现"（迷你 NapCat），反向 WebSocket 连上 AstrBot 的 OneBot 适配器；消息流：桌宠说话 → 伪装 OneBot 反向推送（`message` 事件）→ AstrBot 对话流（记忆+人格）→ 桃桃回复（`send_private_msg` 动作）→ 回传桌宠显示。身份：sender 固定映射 `1063310598`（桃桃认得老公，解锁完整人格）。
+
+### 7.2 模块结构（深度解耦）
+
+```
+ui.py ──5接口──▶ brain.py(Brain门面) ──▶ backends/{base,openai,astrbot}.py
+                                            │  BACKEND 配置选择
+   astrbot: AstrBotBackend ──▶ onebot_bridge.py ──WS+token──▶ AstrBot
+   openai:  OpenAIBackend   ──▶ openai SDK + memory.py(pet.db)
+```
+
+- `backends/base.py`：`ReplyBackend` 抽象基类（`get_llm_response` / `get_response_with_context` / `memorize` / `maybe_compress` / `maybe_extract_facts`）+ 统一响应对象 `BackendResponse`（`content` + `tool_calls`），ui 只认契约，不认 SDK 类型
+- `backends/__init__.py`：`create_backend(config)` 工厂，按 `BACKEND` 键装配
+- `backends/openai.py`：旧直连 LLM 逻辑整体迁移（tools 循环、摘要压缩、事实抽取）
+- `backends/astrbot.py`：OneBot 通道对话 + 本地唤醒规则（should_reply 不调 LLM 省 token）+ 屏幕感知状态机 + `[look_at_screen]` 文本指令协议；记忆三接口为空操作
+- `onebot_bridge.py`：OneBot 11 反向 WS 客户端（Bearer token、30s 心跳、动作响应、静默窗口结算）
+
+### 7.3 关键机制
+
+- **静默窗口**：AstrBot 可能连发多条回复（如"回复中提示"占位 + 最终回复），收到回复后 `ASTRBOT_SETTLE` 秒内无新回复才视为最终回复，取最后一条
+- **屏幕感知状态机**（事件驱动 + 变化门控 + 冷却）：idle 60s / active 20s 截屏 → 16×16 感知哈希 diff → 变化幅度超阈值 且 冷却期过 且 不在对话中 且 用户静默期过，才发桃桃"主动观察"消息；回复"无"类则静默丢弃，有内容则主动冒泡（`reply_sink` 回调）
+- **`[look_at_screen]` 协议**：桃桃回复含此标记 → 桌宠本地截屏 → 附图追问（≤3 轮）→ 显示最终回复；作为"LLM 主动调工具看屏幕"的轻量实现（MCP 为阶段四候选）
+- **唤醒规则**：叫名字（糯糯/桃桃）、直接指令（看看/屏幕/截图等）、问候、疑问、触碰彩蛋 → 回复；背景碎片 → 仅记忆（astrbot 模式下为空操作）
+
+### 7.4 AstrBot 侧依赖（2026-08-10 已实测联调成功）
+
+AstrBot 的 OneBot V11 适配器即 **aiocqhttp 库**（Quart ASGI，服务器 banner 为 hypercorn），
+反向 WS 端点 `/ws`、`/ws/event`、`/ws/api`。握手**强制要求三个头**（`_handle_wsr` 源码）：
+
+1. `Authorization: Bearer <token>` —— 正则 `(?:[Tt]oken|[Bb]earer) (\S+)` 校验，值必须等于适配器配置的 token
+2. `X-Client-Role: universal` —— 连接角色（event/api/universal），**缺了直接 400**；
+   桌宠用 universal（同时上报事件 + 接收动作）
+3. `X-Self-ID: <self_id>` —— 机器人身份，服务器按它路由动作下发（允许 `*` 通配）
+
+联调踩坑记录：只发 Bearer 头 → 400（不是 token 错了，是缺 X-Client-Role 触发 KeyError）；
+无头 → 401；`?access_token=` 查询参数一律 401（该库只认 Authorization 头）。
+AstrBot 侧配置：反向 WebSocket 主机 `0.0.0.0`、端口自定、token 自定；NapCat 等正常客户端
+与桌宠可共存（单连接时动作路由直接用唯一连接）。
+
+「回复中提示」：实测桃桃单条回复即结束（未见占位提示），`ASTRBOT_SETTLE = 2.0` 默认值即可；
+若日后开启提示且间隔超过 settle，需相应调大（见 onebot_bridge 静默窗口语义）。

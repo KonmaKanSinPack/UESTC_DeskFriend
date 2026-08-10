@@ -4,7 +4,9 @@
 
 - **听觉**：麦克风常驻监听，Silero VAD（ONNX，本地模型）检测说话，faster-whisper 中文语音转文字
 - **视觉**：截屏注入多模态大模型上下文，说一句"看看我的屏幕"它就能描述你在干什么
-- **对话**：OpenAI 兼容接口（默认 `gemini-2.5-pro`），支持 tool calling，气泡显示回复
+- **对话**：可插拔回复后端（`config.toml` 的 `BACKEND` 键选择）：
+  - `astrbot`（默认）：经 OneBot 11 伪装通道接入 AstrBot 的桃桃，记忆/人格由 AstrBot 接管；自带屏幕感知（屏幕变化时主动观察冒泡）
+  - `openai`：直连 OpenAI 兼容接口（默认 `gemini-2.5-pro`），自建 SQLite 记忆
 - **交互**：语音 / 单击输入文字 / 双击"触碰"彩蛋 / 拖动摆放，带呼吸、思考、说话的状态动画
 
 ## 运行环境
@@ -46,10 +48,28 @@ uv sync
 
 ```bash
 cp config.example.toml config.toml
-# 编辑 config.toml，填入 API_KEY 和 BASE_URL
-# 可选：SYSTEM_PROMPT 自定义系统提示词（人设），不填用内置糯糯人设
-# 可选：SPRITE 自定义贴图路径，支持 GIF 动图（默认 assets/nuonuo.png）
 ```
+
+- 默认 `BACKEND = "astrbot"`：填入 `ASTRBOT_WS_URL` / `ASTRBOT_WS_TOKEN` 即可对话（见下节）
+- 切 `BACKEND = "openai"`：填入 `API_KEY` 和 `BASE_URL`
+- 可选：`SYSTEM_PROMPT` 自定义人设；`SPRITE` 自定义贴图路径（支持 GIF 动图）
+
+### 接入 AstrBot（astrbot 后端）
+
+桌宠伪装成一个 OneBot 实现（迷你 NapCat），反向 WebSocket 连上 AstrBot 的 OneBot V11
+适配器（aiocqhttp），消息流：桌宠说话 → 事件上报 → AstrBot 对话流（记忆+人格）→
+桃桃回复 → 回传气泡显示。sender 固定为 `ASTRBOT_USER_ID`（默认 1063310598，桃桃认得的"老公"）。
+
+**AstrBot 侧**（WebUI → 消息平台 → 添加 aiocqhttp 适配器）：启用反向 WebSocket，
+主机 `0.0.0.0`、端口任意（如 8786）、token 自定；NapCat 等正常客户端照常连接，
+桌宠与之共存。
+
+**桌宠侧**：config.toml 填好 `ASTRBOT_WS_URL`（如 `ws://192.168.10.2:8786/ws`）与
+`ASTRBOT_WS_TOKEN` 即可。握手自动携带三个头（aiocqhttp 强制要求，缺一不可）：
+`Authorization: Bearer <token>`、`X-Client-Role: universal`、`X-Self-ID: <self_id>`。
+
+**屏幕感知**：idle 态每 60s / 对话活跃期每 20s 截屏做感知哈希对比，屏幕显著变化且
+通过冷却/静默门控时，发桃桃"主动观察"消息；桃桃觉得值得说会主动冒泡显示气泡。
 
 ### 模型
 
@@ -75,24 +95,27 @@ uv run python main.py
 
 | 操作 | 效果 |
 |------|------|
-| 直接说话 | 语音识别 → 判断是否需要回应 → 气泡回复 |
-| 说"看看我的屏幕" | 模型调用 `look_at_screen` 工具截屏并描述 |
+| 直接说话 | 语音识别 → 本地唤醒判断（叫名字/指令/疑问才回）→ 气泡回复 |
+| 说"看看我的屏幕" | 桌宠本地截屏，把屏幕图发给桃桃描述 |
 | 单击桌宠 | 唤起/收起文字输入框，回车发送 |
 | 双击桌宠 | "用户触碰了你"彩蛋 |
 | 拖动 | 移动位置 |
+| 屏幕有变化（空闲时） | 桃桃主动观察，有值得说的会主动冒泡 |
 
 ## 项目结构
 
 ```
 main.py        # 入口（Qt + asyncio 事件循环装配）
-brain.py       # LLM 通信、消息打包、工具参数解析
+brain.py       # Brain 门面：统一契约，转发给后端
+backends/      # 回复后端：base（契约）/ astrbot（OneBot 通道+屏幕感知）/ openai（直连+自建记忆）
+onebot_bridge.py  # OneBot 11 反向 WS 伪装客户端（事件上报/动作响应/静默结算）
 vision.py      # 截屏（Wayland PipeWire → gnome-screenshot → X11 ImageGrab）
 listen.py      # VAD 语音检测 + Whisper 转写
 ui.py          # DeskFriend 窗口：气泡、输入框、动画、消息调度
 pw_capture.py  # Wayland 静默截屏后端（ScreenCast Portal + PipeWire + GStreamer）
 assets/        # 贴图 + VAD 模型
 tests/         # pytest 用例
-docs/          # 开发文档：DEVELOPMENT.md（技术决策）、dev-journey.md（魔改历程）
+docs/          # 开发文档：DEVELOPMENT.md（技术决策）、dev-journey.md（魔改历程）、session/（每日日志）
 ```
 
 ## 开发
