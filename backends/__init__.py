@@ -1,14 +1,13 @@
 """回复后端工厂：按 config.toml 的 BACKEND 键装配实现（astrbot / openai）。
 
 新增后端：在 backends/ 下实现 ReplyBackend 子类，这里加一个分支即可。
+
+解耦约定：本包顶层只暴露 base 契约（零依赖）；具体后端与其依赖在
+create_backend 内**按需懒加载**——只跑 astrbot 模式时不加载 openai SDK。
 """
 
-from openai import AsyncOpenAI
-
-from .astrbot import AstrBotBackend
 from .base import BackendResponse, ReplyBackend, ToolCall
 from .judger import LLMJudge
-from .openai import OpenAIBackend
 
 
 def create_judge(config):
@@ -22,14 +21,26 @@ def create_judge(config):
     if not api_key or not base_url:
         print("判定器未配置：config.toml 缺少 API_KEY/BASE_URL（openai 段），判定回退为默认回复")
         return None
+    try:
+        # 懒加载：judger 本身零依赖，client 按需构建；缺 openai SDK 时优雅降级
+        from openai import AsyncOpenAI
+    except ImportError:
+        print("判定器不可用：未安装 openai SDK，判定回退为默认回复")
+        return None
+
     model = config.get("JUDGE_MODEL", "gemini-2.5-pro")
     return LLMJudge(client=AsyncOpenAI(api_key=api_key, base_url=base_url), model=model)
 
 
 def create_backend(config):
-    """根据配置创建回复后端。config 为 tomllib 解析出的 dict。"""
+    """根据配置创建回复后端。config 为 tomllib 解析出的 dict。
+
+    后端类在分支内懒加载：import 本包不触发任何后端依赖。
+    """
     name = config.get("BACKEND", "astrbot")
     if name == "astrbot":
+        from .astrbot import AstrBotBackend  # 懒加载：astrbot 分支不碰 openai SDK
+
         return AstrBotBackend(
             judge=create_judge(config),
             url=config.get("ASTRBOT_WS_URL", "ws://127.0.0.1:20081/api"),
@@ -45,6 +56,8 @@ def create_backend(config):
             screen_user_silence=config.get("SCREEN_USER_SILENCE", 120),
         )
     if name == "openai":
+        from .openai import OpenAIBackend  # 懒加载：openai 分支才需要 openai SDK
+
         return OpenAIBackend()
     raise ValueError(f"未知 BACKEND: {name!r}（可选：astrbot / openai）")
 
