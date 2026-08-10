@@ -2,7 +2,15 @@
 
 import asyncio
 
-from tts import COSYVOICE2_HF_REPO, DEFAULT_MODEL_DIR, CosyVoice2TTS, DummyTTS, create_tts, ensure_cosyvoice_model
+from tts import (
+    COSYVOICE2_HF_REPO,
+    DEFAULT_MODEL_DIR,
+    CosyVoice2TTS,
+    DummyTTS,
+    _split_sentences,
+    create_tts,
+    ensure_cosyvoice_model,
+)
 
 
 class TestDummyTTS:
@@ -38,13 +46,31 @@ class TestDummyTTS:
         assert tts.speak_calls == []
 
 
-class TestCosyVoice2Stub:
-    def test_construct_and_speak_no_crash(self, tmp_path, monkeypatch):
+class TestCosyVoice2TTS:
+    def test_construct_ok(self, tmp_path, monkeypatch):
         monkeypatch.setattr("tts.ensure_cosyvoice_model", lambda d: tmp_path)  # 防测试触发真下载
         tts = CosyVoice2TTS(voice_ref="ref.wav", voice_ref_text="参考文本")
-        asyncio.run(tts.speak("桃桃在呢"))
-        assert tts.speak_calls == ["桃桃在呢"]
         assert tts.busy is False
+        assert tts.played_text == ""
+
+    def test_speak_without_voice_ref_no_crash(self, tmp_path, monkeypatch):
+        """缺参考音频（未配置）→ speak 捕获异常不崩，busy 复位。"""
+        monkeypatch.setattr("tts.ensure_cosyvoice_model", lambda d: tmp_path)
+        tts = CosyVoice2TTS()
+        asyncio.run(tts.speak("桃桃在呢"))
+        assert tts.busy is False
+
+    def test_interrupt_when_idle_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tts.ensure_cosyvoice_model", lambda d: tmp_path)
+        tts = CosyVoice2TTS()
+        assert asyncio.run(tts.interrupt()) == ""
+
+
+class TestSplitSentences:
+    def test_splits_by_chinese_punctuation(self):
+        assert _split_sentences("你好呀。今天怎么样？") == ["你好呀。", "今天怎么样？"]
+        assert _split_sentences("没有标点的一句话") == ["没有标点的一句话"]
+        assert _split_sentences("") == []
 
 
 class TestEnsureModel:

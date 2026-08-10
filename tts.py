@@ -11,6 +11,8 @@
 
 import asyncio
 import logging
+import re
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -19,6 +21,12 @@ logger = logging.getLogger(__name__)
 # CosyVoice2 模型：HuggingFace 仓库与默认本地目录
 COSYVOICE2_HF_REPO = "FunAudioLLM/CosyVoice2-0.5B"
 DEFAULT_MODEL_DIR = "assets/models/CosyVoice2-0.5B"
+COSYVOICE2_SAMPLE_RATE = 22050  # CosyVoice2 输出采样率
+
+
+def _split_sentences(text):
+    """按中文句末标点切句（保留标点）。逐句合成播放 = 句粒度打断进度。"""
+    return [s for s in re.split(r"(?<=[。！？!?；;])", text) if s.strip()]
 
 
 def ensure_cosyvoice_model(model_dir=None):
@@ -116,10 +124,12 @@ class DummyTTS(TTS):
 
 
 class CosyVoice2TTS(TTS):
-    """CosyVoice2 本地合成（stub，待接入）。
+    """CosyVoice2 本地合成（零样本克隆音色，GPU）。
 
-    接入要求：torch+CUDA 环境、模型权重（CosyVoice2-0.5B）、参考音频与文本
-    （零样本克隆音色）。当前占位：构造时打印提示，speak 仅记录。
+    - 模型：首次 speak 时惰性加载（约 10~20s；缺失自动下载，尊重 HF_ENDPOINT 镜像）
+    - 合成：逐句 inference_zero_shot（流式 chunk），sounddevice 播放（22050Hz）
+    - 打断：interrupt() 设停止标志 + sd.stop()（线程安全），返回已播句前缀
+    - 线程：模型加载/合成/播放都是阻塞操作，speak 整体丢到线程池，不卡事件循环
     """
 
     def __init__(self, model_dir: str = "", voice_ref: str = "", voice_ref_text: str = ""):
@@ -127,20 +137,71 @@ class CosyVoice2TTS(TTS):
         self.model_dir = str(ensure_cosyvoice_model(model_dir))
         self.voice_ref = voice_ref
         self.voice_ref_text = voice_ref_text
+        self._model = None
+        self._prompt_speech = None
         self._busy = False
         self._played = ""
-        self.speak_calls: list[str] = []
-        logger.warning(
-            "CosyVoice2 尚未接入（框架占位）：请在 tts.CosyVoice2TTS 实现合成逻辑。参考音频：%s",
-            voice_ref or "（未配置）",
-        )
+        self._stop_event = None
+
+    def _load(self):
+        """惰性加载模型与参考音频（同步；调用方负责丢线程）。"""
+        if self._model is not None:
+            return
+        if not self.voice_ref or not self.voice_ref_text:
+            raise RuntimeError("CosyVoice2 零样本克隆需要配置 TTS_VOICE_REF 与 TTS_VOICE_REF_TEXT")
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).parent / "CosyVoice"))
+        from cosyvoice.cli.cosyvoice import CosyVoice2
+        from cosyvoice.utils.file_utils import load_wav
+
+        logger.warning("加载 CosyVoice2 模型（首次约 10~20s）…")
+        self._model = CosyVoice2(self.model_dir, load_jit=False, load_trt=False, fp16=True)
+        self._prompt_speech = load_wav(self.voice_ref, 16000)
+        logger.warning("CosyVoice2 就绪（音色参考：%s）", self.voice_ref)
 
     async def speak(self, text: str) -> None:
-        self.speak_calls.append(text)
-        logger.warning("[CosyVoice2 占位] 应朗读：%s…", text[:20])
+        if not text:
+            return
+        try:
+            await asyncio.to_thread(self._speak_sync, text)
+        except Exception as e:
+            logger.error("CosyVoice2 合成失败：%s", e)
+        finally:
+            self._busy = False
+
+    def _speak_sync(self, text: str) -> None:
+        """线程内：加载模型 + 逐句合成 + 播放（interrupt 可随时打断）。"""
+        self._load()
+        self._busy = True
+        self._played = ""
+        self._stop_event = threading.Event()
+        import sounddevice as sd
+
+        for sentence in _split_sentences(text):
+            if self._stop_event.is_set():
+                break
+            for chunk in self._model.inference_zero_shot(sentence, self.voice_ref_text, self._prompt_speech):
+                if self._stop_event.is_set():
+                    break
+                audio = chunk["tts_speech"].cpu().numpy().flatten()
+                sd.play(audio, samplerate=COSYVOICE2_SAMPLE_RATE)
+                sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
+            self._played += sentence  # 该句播放完成（或被中断时已尽力播放）
+        if not self._stop_event.is_set():
+            self._played = text  # 全部播完 = 完整文本
 
     async def interrupt(self) -> str:
-        return ""
+        if self._busy and self._stop_event is not None:
+            self._stop_event.set()
+            try:
+                import sounddevice as sd
+
+                sd.stop()  # 线程安全：立即停止当前播放
+            except Exception:
+                pass
+        prefix, self._played = self._played, ""
+        return prefix
 
     @property
     def busy(self) -> bool:

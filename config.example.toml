@@ -33,12 +33,12 @@ SCREEN_USER_SILENCE = 120  # 距上次用户输入的最小静默（秒），用
 # SYSTEM_PROMPT = "你是糯糯，一只Q版弗洛洛毛绒玩偶形态的桌面AI伙伴……"
 
 # ---- 语音输出（TTS）----
-# TTS_BACKEND: dummy（占位，不发声）/ cosyvoice2（本地合成，待接入）/ none（关闭）
+# TTS_BACKEND: dummy（占位，不发声）/ cosyvoice2（本地合成，模型缺失自动下载）/ none（关闭）
 TTS_BACKEND = "dummy"
 # CosyVoice2 零样本克隆：参考音频（3-10 秒）与其文本内容（克隆音色必需）
-# TTS_MODEL_DIR = "models/CosyVoice2-0.5B"
+# TTS_MODEL_DIR = "assets/models/CosyVoice2-0.5B"
 # TTS_VOICE_REF = "assets/voice_ref.wav"
-# TTS_VOICE_REF_TEXT = "（参考音频里说的话）"
+# TTS_VOICE_REF_TEXT = "（参考音频里说的话，务必与音频内容一致，可用 faster-whisper 转写后人工修正）"
 
 # 可选：桌宠贴图路径（相对项目目录或绝对路径），支持静态图与 GIF 动图。
 # SPRITE = "assets/nuonuo.png"
