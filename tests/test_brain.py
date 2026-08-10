@@ -46,7 +46,7 @@ def test_parse_tool_args_garbage():
 
 
 class TestShouldReplyLocal:
-    """本地唤醒规则：叫名字/直接指令/问候/疑问/触碰彩蛋 → True；背景碎片 → False。"""
+    """本地唤醒规则（反向判定）：名字/指令/问候/疑问/触碰彩蛋/主动搭话 → True；纯语气词碎片 → False。"""
 
     def test_called_by_name(self):
         assert should_reply_local("糯糯你在吗")
@@ -70,10 +70,15 @@ class TestShouldReplyLocal:
         assert should_reply_local("用户用鼠标触碰了你")
 
     def test_background_noise(self):
-        assert not should_reply_local("嗯嗯")
-        assert not should_reply_local("好")
-        assert not should_reply_local("（键盘敲击声）")
+        # 纯语气词/填充词 → 不打扰
+        for t in ("嗯嗯", "好", "好的", "哈哈", "知道了", "哦哦", "ok", "嗯嗯嗯"):
+            assert not should_reply_local(t), t
         assert not should_reply_local("")
+
+    def test_active_talk_default_reply(self):
+        """主动搭话没有名单关键词也回（宁可多回不可漏听，治漏判）。"""
+        for t in ("陪我玩", "讲个笑话", "好无聊啊", "给我唱首歌", "说点有意思的", "今天有什么新鲜事"):
+            assert should_reply_local(t), t
 
 
 class TestPhash:

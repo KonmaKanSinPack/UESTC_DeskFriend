@@ -54,15 +54,53 @@ def clean_markdown(text):
     return t.strip()
 
 
-def should_reply_local(text):
-    """本地唤醒规则（替代 LLM 判定）：叫名字/直接指令/问候/疑问/触碰 → True；背景碎片 → False。
+# 明确背景碎片：纯语气词/填充词，命中则不打扰（其余一律默认回复）
+BACKGROUND_NOISE = {
+    "嗯",
+    "哦",
+    "啊",
+    "哈",
+    "好",
+    "行",
+    "对",
+    "是",
+    "嗯嗯",
+    "哦哦",
+    "哈哈",
+    "嘿嘿",
+    "好的",
+    "好嘞",
+    "好啊",
+    "行吧",
+    "好吧",
+    "知道了",
+    "没事",
+    "对对",
+    "晓得",
+    "ok",
+    "okay",
+    "嗯嗯嗯",
+}
 
-    保守优先：宁可漏回（用户再叫一次名字即可），也不要在背景谈话里打扰。
+
+def should_reply_local(text):
+    """本地唤醒规则（替代 LLM 判定）：反向判定——除明确背景碎片外一律回复。
+
+    设计（2026-08-10）：原保守名单（命中才 true、默认 false）实测漏判严重——
+    用户主动搭话（"陪我玩""讲个笑话"）都不回。改为反向判定：
+    - 空文本 / 纯语气词碎片 → false（不打扰）
+    - 名字/指令/疑问/问候/触碰彩蛋 → true（必回）
+    - 其余主动搭话 → 默认 true（宁可多回不可漏听）
     """
-    t = text or ""
+    t = (text or "").strip()
+    if not t:
+        return False
     # 双击彩蛋：ui 发来的固定互动消息
     if "触碰" in t and "鼠标" in t:
         return True
+    # 明确背景碎片：纯语气词/填充词 → 不打扰
+    if t.lower() in BACKGROUND_NOISE:
+        return False
     # 叫名字
     for name in ("糯糯", "桃桃"):
         if name in t:
@@ -75,7 +113,8 @@ def should_reply_local(text):
     for kw in ("?", "？", "吗", "什么", "怎么", "为什么", "谁", "哪", "几点", "多少", "干嘛", "帮我", "告诉"):
         if kw in t:
             return True
-    return False
+    # 其余：主动搭话默认回（宁可多回不可漏听）
+    return True
 
 
 def phash(img, size=16):
@@ -226,6 +265,11 @@ class AstrBotBackend(ReplyBackend):
             content = last.get("content") if isinstance(last, dict) else ""
             if isinstance(content, str):
                 text = content
+                # ui.should_reply 构造 judge 消息时固定带前缀，剥离后再判，
+                # 否则纯语气词（"嗯嗯"）带着前缀不命中 BACKGROUND_NOISE
+                prefix = "用户的消息是："
+                if text.startswith(prefix):
+                    text = text[len(prefix) :]
         return BackendResponse(content="true" if should_reply_local(text) else "false")
 
     # ---------- 记忆（空操作：由 AstrBot 接管） ----------
