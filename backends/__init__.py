@@ -29,7 +29,12 @@ def create_judge(config):
         return None
 
     model = config.get("JUDGE_MODEL", "gemini-2.5-pro")
-    return LLMJudge(client=AsyncOpenAI(api_key=api_key, base_url=base_url), model=model)
+    # timeout 必须显式放宽：openai SDK 默认 connect=5s，而 MiniMax 网关
+    # 连接+响应常达 9~12s，默认值会稳定超时（实测踩坑）
+    return LLMJudge(
+        client=AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=60.0, max_retries=1),
+        model=model,
+    )
 
 
 def create_backend(config):

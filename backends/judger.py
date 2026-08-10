@@ -8,6 +8,8 @@
 判定倾向：不确定时输出 true（宁可多回，不可漏听——原本地关键词规则实测漏判严重）。
 """
 
+import re
+
 JUDGE_SYSTEM_PROMPT = (
     "你是桌宠的消息过滤器，判断用户的话是否需要桌宠回应。\n"
     "规则：\n"
@@ -41,11 +43,15 @@ class LLMJudge:
                     {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
                     {"role": "user", "content": f"用户的消息是：{user_text}"},
                 ],
-                # 判定只需 true/false，限制输出长度省 token
-                max_tokens=8,
+                # 推理模型（如 MiniMax-M3）会先输出 <think> 思考块再给结论，
+                # token 太短会被思考块截断导致判定失效（实测 max_tokens=8 必挂）
+                max_tokens=200,
             )
-            content = (response.choices[0].message.content or "").strip().lower()
-            return content == "true"
+            content = (response.choices[0].message.content or "").lower()
+            # 剥掉 <think> 思考块（实测输出形如 "<think>…</think>\ntrue"）
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
+            matches = re.findall(r"\b(true|false)\b", content)
+            return matches[-1] == "true" if matches else False
         except Exception as e:
             print(f"判定器调用失败：{e}；默认回复（宁可多回不可漏听）")
             return True

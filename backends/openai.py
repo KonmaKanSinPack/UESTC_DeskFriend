@@ -73,7 +73,8 @@ class OpenAIBackend(ReplyBackend):
         if client is None:
             with open("config.toml", "rb") as f:
                 config = tomllib.load(f)
-            client = AsyncOpenAI(api_key=config["API_KEY"], base_url=config["BASE_URL"])
+            # timeout 显式放宽：SDK 默认 connect=5s，部分网关（如 MiniMax）连接+响应 9~12s 会稳定超时
+            client = AsyncOpenAI(api_key=config["API_KEY"], base_url=config["BASE_URL"], timeout=60.0, max_retries=1)
             system_prompt = config.get("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self.client = client
