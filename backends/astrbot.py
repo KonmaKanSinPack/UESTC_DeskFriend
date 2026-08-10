@@ -54,67 +54,22 @@ def clean_markdown(text):
     return t.strip()
 
 
-# 明确背景碎片：纯语气词/填充词，命中则不打扰（其余一律默认回复）
-BACKGROUND_NOISE = {
-    "嗯",
-    "哦",
-    "啊",
-    "哈",
-    "好",
-    "行",
-    "对",
-    "是",
-    "嗯嗯",
-    "哦哦",
-    "哈哈",
-    "嘿嘿",
-    "好的",
-    "好嘞",
-    "好啊",
-    "行吧",
-    "好吧",
-    "知道了",
-    "没事",
-    "对对",
-    "晓得",
-    "ok",
-    "okay",
-    "嗯嗯嗯",
-}
+def _extract_judge_text(context):
+    """从 ui.should_reply 构造的 judge context 提取用户消息原文。
 
-
-def should_reply_local(text):
-    """本地唤醒规则（替代 LLM 判定）：反向判定——除明确背景碎片外一律回复。
-
-    设计（2026-08-10）：原保守名单（命中才 true、默认 false）实测漏判严重——
-    用户主动搭话（"陪我玩""讲个笑话"）都不回。改为反向判定：
-    - 空文本 / 纯语气词碎片 → false（不打扰）
-    - 名字/指令/疑问/问候/触碰彩蛋 → true（必回）
-    - 其余主动搭话 → 默认 true（宁可多回不可漏听）
+    ui 固定用 "用户的消息是：{message}" 包装，剥离前缀后再交给决策器，
+    否则纯语气词（"嗯嗯"）带着前缀会让判定失真。
     """
-    t = (text or "").strip()
-    if not t:
-        return False
-    # 双击彩蛋：ui 发来的固定互动消息
-    if "触碰" in t and "鼠标" in t:
-        return True
-    # 明确背景碎片：纯语气词/填充词 → 不打扰
-    if t.lower() in BACKGROUND_NOISE:
-        return False
-    # 叫名字
-    for name in ("糯糯", "桃桃"):
-        if name in t:
-            return True
-    # 直接指令 / 问候
-    for kw in ("看看", "屏幕", "截图", "打开", "理我", "出来", "过来", "你好", "早安", "午安", "晚安", "嗨", "哈喽"):
-        if kw in t:
-            return True
-    # 疑问（"几点/多少/干嘛"覆盖"现在几点了""多少钱""你在干嘛"等口语问句）
-    for kw in ("?", "？", "吗", "什么", "怎么", "为什么", "谁", "哪", "几点", "多少", "干嘛", "帮我", "告诉"):
-        if kw in t:
-            return True
-    # 其余：主动搭话默认回（宁可多回不可漏听）
-    return True
+    text = ""
+    if context:
+        last = context[-1]
+        content = last.get("content") if isinstance(last, dict) else ""
+        if isinstance(content, str):
+            text = content
+            prefix = "用户的消息是："
+            if text.startswith(prefix):
+                text = text[len(prefix) :]
+    return text
 
 
 def phash(img, size=16):
@@ -180,9 +135,10 @@ class AstrBotBackend(ReplyBackend):
         screen_cooldown=180,
         screen_user_silence=120,
         bridge=None,
+        judge=None,
         enable_observer=True,
     ):
-        """bridge 可注入（测试用）；enable_observer=False 关闭屏幕感知循环（测试用）。"""
+        """bridge / judge 可注入（测试用）；enable_observer=False 关闭屏幕感知循环（测试用）。"""
         self.bridge = bridge or OneBotBridge(
             url=url,
             token=token,
@@ -198,6 +154,7 @@ class AstrBotBackend(ReplyBackend):
         self.screen_cooldown = screen_cooldown
         self.screen_user_silence = screen_user_silence
 
+        self.judge = judge  # LLM 决策器（should_reply 判定），由工厂注入
         self.reply_sink = None  # ui 挂的回调：主动冒泡显示（brain 门面转发）
         self._last_phash = None  # 上次观察到的屏幕哈希
         self._last_proactive_at = 0.0  # 上次主动观察时间
@@ -258,19 +215,16 @@ class AstrBotBackend(ReplyBackend):
         return BackendResponse(content=content)
 
     async def get_response_with_context(self, context, model=None, use_tools=False):
-        """should_reply 判定：本地唤醒规则，不调 LLM（省 token）。"""
-        text = ""
-        if context:
-            last = context[-1]
-            content = last.get("content") if isinstance(last, dict) else ""
-            if isinstance(content, str):
-                text = content
-                # ui.should_reply 构造 judge 消息时固定带前缀，剥离后再判，
-                # 否则纯语气词（"嗯嗯"）带着前缀不命中 BACKGROUND_NOISE
-                prefix = "用户的消息是："
-                if text.startswith(prefix):
-                    text = text[len(prefix) :]
-        return BackendResponse(content="true" if should_reply_local(text) else "false")
+        """should_reply 判定：统一走 LLM 决策器（judge），不用本地关键词规则。
+
+        判定在桌宠侧自调 LLM，不进 AstrBot 对话流，不污染桃桃记忆。
+        """
+        text = _extract_judge_text(context)
+        if self.judge is None:
+            print("判定器未配置（JUDGE 相关配置缺失），默认回复")
+            return BackendResponse(content="true")
+        reply = await self.judge.should_reply(text)
+        return BackendResponse(content="true" if reply else "false")
 
     # ---------- 记忆（空操作：由 AstrBot 接管） ----------
 

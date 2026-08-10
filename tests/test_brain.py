@@ -1,7 +1,7 @@
 from PIL import Image
 
 from backends import ToolCall
-from backends.astrbot import phash, phash_score, should_reply_local
+from backends.astrbot import phash, phash_score
 from brain import pack_msg, parse_tool_args
 
 
@@ -43,42 +43,6 @@ def test_parse_tool_args_null_and_non_dict():
 
 def test_parse_tool_args_garbage():
     assert parse_tool_args("这不是json") == {}
-
-
-class TestShouldReplyLocal:
-    """本地唤醒规则（反向判定）：名字/指令/问候/疑问/触碰彩蛋/主动搭话 → True；纯语气词碎片 → False。"""
-
-    def test_called_by_name(self):
-        assert should_reply_local("糯糯你在吗")
-        assert should_reply_local("桃桃，过来")
-
-    def test_direct_commands(self):
-        for text in ("看看我的屏幕", "帮我截个图", "打开桌面", "理我一下"):
-            assert should_reply_local(text), text
-
-    def test_greetings(self):
-        assert should_reply_local("你好呀")
-        assert should_reply_local("早安")
-
-    def test_questions(self):
-        assert should_reply_local("今天天气怎么样？")
-        assert should_reply_local("现在几点了")
-        assert should_reply_local("为什么月亮是圆的")
-        assert should_reply_local("帮我看下这个")
-
-    def test_poke_interaction(self):
-        assert should_reply_local("用户用鼠标触碰了你")
-
-    def test_background_noise(self):
-        # 纯语气词/填充词 → 不打扰
-        for t in ("嗯嗯", "好", "好的", "哈哈", "知道了", "哦哦", "ok", "嗯嗯嗯"):
-            assert not should_reply_local(t), t
-        assert not should_reply_local("")
-
-    def test_active_talk_default_reply(self):
-        """主动搭话没有名单关键词也回（宁可多回不可漏听，治漏判）。"""
-        for t in ("陪我玩", "讲个笑话", "好无聊啊", "给我唱首歌", "说点有意思的", "今天有什么新鲜事"):
-            assert should_reply_local(t), t
 
 
 class TestPhash:

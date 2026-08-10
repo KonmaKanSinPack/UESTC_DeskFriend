@@ -138,7 +138,7 @@ ui.py ──5接口──▶ brain.py(Brain门面) ──▶ backends/{base,open
 - `backends/base.py`：`ReplyBackend` 抽象基类（`get_llm_response` / `get_response_with_context` / `memorize` / `maybe_compress` / `maybe_extract_facts`）+ 统一响应对象 `BackendResponse`（`content` + `tool_calls`），ui 只认契约，不认 SDK 类型
 - `backends/__init__.py`：`create_backend(config)` 工厂，按 `BACKEND` 键装配
 - `backends/openai.py`：旧直连 LLM 逻辑整体迁移（tools 循环、摘要压缩、事实抽取）
-- `backends/astrbot.py`：OneBot 通道对话 + 本地唤醒规则（should_reply 不调 LLM 省 token）+ 屏幕感知状态机 + `[look_at_screen]` 文本指令协议；记忆三接口为空操作
+- `backends/astrbot.py`：OneBot 通道对话 + 屏幕感知状态机 + `[look_at_screen]` 文本指令协议；should_reply 判定由 `LLMJudge`（judger.py）统一负责；记忆三接口为空操作
 - `onebot_bridge.py`：OneBot 11 反向 WS 客户端（Bearer token、30s 心跳、动作响应、静默窗口结算）
 
 ### 7.3 关键机制
@@ -146,7 +146,10 @@ ui.py ──5接口──▶ brain.py(Brain门面) ──▶ backends/{base,open
 - **静默窗口**：AstrBot 可能连发多条回复（如"回复中提示"占位 + 最终回复），收到回复后 `ASTRBOT_SETTLE` 秒内无新回复才视为最终回复，取最后一条
 - **屏幕感知状态机**（事件驱动 + 变化门控 + 冷却）：idle 60s / active 20s 截屏 → 16×16 感知哈希 diff → 变化幅度超阈值 且 冷却期过 且 不在对话中 且 用户静默期过，才发桃桃"主动观察"消息；回复"无"类则静默丢弃，有内容则主动冒泡（`reply_sink` 回调）
 - **`[look_at_screen]` 协议**：桃桃回复含此标记 → 桌宠本地截屏 → 附图追问（≤3 轮）→ 显示最终回复；作为"LLM 主动调工具看屏幕"的轻量实现（MCP 为阶段四候选）
-- **唤醒规则（2026-08-10 改为反向判定）**：除**明确背景碎片**（纯语气词/填充词：嗯/哦/哈哈/好的/知道了等）外一律回复——叫名字、直接指令、疑问、问候、触碰彩蛋必回；其余主动搭话默认回（宁可多回不可漏听）。原"保守名单、默认 false"因实测漏判（用户主动搭话不回）而废弃
+- **should_reply 判定（2026-08-10 起统一走 LLM 决策器）**：废弃本地关键词规则（漏判严重，且提示词与实现分离）。`backends/judger.py` 的 `LLMJudge`（few-shot 提示词 + "不确定输出 true"）统一判定：
+  - openai 后端走通用 LLM 通道（context 里的共享提示词）
+  - astrbot 后端由桌宠侧自调 LLM（复用 `API_KEY`/`BASE_URL` + `JUDGE_MODEL` 配置），判定**不进 AstrBot 对话流**，不污染桃桃记忆
+  - 判定器未配置 / 调用失败 → 回退默认回复（宁可多回，不可漏听）
 
 ### 7.4 AstrBot 侧依赖（2026-08-10 已实测联调成功）
 

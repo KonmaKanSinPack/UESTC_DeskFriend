@@ -8,6 +8,7 @@ from PyQt5.QtCore import QPoint, QSize, Qt, QTimer
 from PyQt5.QtGui import QMovie, QPixmap
 from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
 
+from backends.judger import JUDGE_SYSTEM_PROMPT
 from brain import Brain, pack_msg, parse_tool_args
 from listen import Listen
 from vision import Vision
@@ -212,19 +213,15 @@ class DeskFriend(QWidget):
 
     async def should_reply(self, message):
         try:
-            judge_msg = pack_msg(
-                "system",
-                "text",
-                "你是桌宠的消息过滤器，判断用户的话是否需要桌宠回应。"
-                "规则：直接对桌宠说的提问、指令（如「看看我的屏幕」「今天天气怎么样」）一律回应 true；"
-                "只有明显与桌宠无关的背景谈话、无意义碎片才回应 false。只输出 true 或 false。",
-            )
+            # 判定提示词单一来源：backends/judger.py（两个后端共用，勿在此内联）
+            judge_msg = pack_msg("system", "text", JUDGE_SYSTEM_PROMPT)
             user_msg = pack_msg("user", "text", f"用户的消息是：{message}")
             judge_context = [judge_msg, user_msg]
 
             response = await self.brain.get_response_with_context(judge_context)
 
             reply_decision = response.content.strip().lower()
+            print(f"查看决策器纯净输出：{reply_decision}")
             return reply_decision == "true"
         except Exception as e:
             print(f"判断是否回复时出错了：{e}")

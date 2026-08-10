@@ -40,9 +40,26 @@ class FakeBridge:
         return self.replies.pop(0) if self.replies else ""
 
 
+class FakeJudge:
+    """假决策器：按预设列表依次返回判定结果。"""
+
+    def __init__(self, replies=None):
+        self.replies = list(replies or [])
+        self.called_with = []
+
+    async def should_reply(self, user_text):
+        self.called_with.append(user_text)
+        return self.replies.pop(0) if self.replies else False
+
+
 @pytest.fixture()
 def backend():
     return AstrBotBackend(url="ws://fake", bridge=FakeBridge(), enable_observer=False)
+
+
+@pytest.fixture()
+def backend_with_judge():
+    return AstrBotBackend(url="ws://fake", bridge=FakeBridge(), judge=FakeJudge(), enable_observer=False)
 
 
 class TestConversation:
@@ -119,19 +136,38 @@ class TestLifecycle:
 
 
 class TestWakeRules:
-    def test_reply_judgement_via_local_rules(self, backend):
+    """should_reply 判定统一走 LLM 决策器（不用本地关键词）。"""
+
+    def test_judge_true(self, backend_with_judge):
+        backend_with_judge.judge.replies = [True]
         judge = [{"role": "user", "content": "用户的消息是：糯糯你在吗"}]
-        resp = asyncio.run(backend.get_response_with_context(judge))
+        resp = asyncio.run(backend_with_judge.get_response_with_context(judge))
         assert resp.content == "true"
 
-    def test_background_judgement_false(self, backend):
+    def test_judge_false(self, backend_with_judge):
+        backend_with_judge.judge.replies = [False]
         judge = [{"role": "user", "content": "用户的消息是：嗯嗯"}]
-        resp = asyncio.run(backend.get_response_with_context(judge))
+        resp = asyncio.run(backend_with_judge.get_response_with_context(judge))
         assert resp.content == "false"
 
-    def test_empty_context_false(self, backend):
-        resp = asyncio.run(backend.get_response_with_context([]))
+    def test_judge_receives_stripped_message(self, backend_with_judge):
+        """ui 的"用户的消息是："前缀必须剥离，决策器只看到用户原文。"""
+        backend_with_judge.judge.replies = [True]
+        judge = [{"role": "user", "content": "用户的消息是：今天好累啊"}]
+        asyncio.run(backend_with_judge.get_response_with_context(judge))
+        assert backend_with_judge.judge.called_with == ["今天好累啊"]
+
+    def test_empty_context_judged_as_empty_text(self, backend_with_judge):
+        backend_with_judge.judge.replies = [False]
+        resp = asyncio.run(backend_with_judge.get_response_with_context([]))
         assert resp.content == "false"
+        assert backend_with_judge.judge.called_with == [""]
+
+    def test_no_judge_defaults_to_reply(self, backend):
+        """判定器未配置（缺 API_KEY）→ 默认回复，不抛错。"""
+        judge = [{"role": "user", "content": "用户的消息是：在吗"}]
+        resp = asyncio.run(backend.get_response_with_context(judge))
+        assert resp.content == "true"
 
 
 class TestMemoryNoop:
