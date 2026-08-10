@@ -5,6 +5,9 @@ description = "桌面 AI 伙伴（桌宠）：语音交互 + 屏幕视觉 + LLM 
 requires-python = ">=3.10"
 dependencies = [
     "pyqt5>=5.15",
+    # pyqt5-qt5 5.15.11 起只发 linux/mac wheel，Windows 无法安装；
+    # 5.15.2 是唯一带 win_amd64 wheel 的版本（pip 在 Windows 装 PyQt5 也是用它）
+    "pyqt5-qt5==5.15.2",
     "qasync>=0.27",
     "openai>=1.0",
     "faster-whisper>=1.0",

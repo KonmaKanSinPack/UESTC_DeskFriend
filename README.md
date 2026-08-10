@@ -9,11 +9,11 @@
 
 ## 运行环境
 
-- Linux（开发环境为 Ubuntu GNOME **Wayland**；X11 亦可，功能降级见下）
+- **Windows 11**（已验证）与 **Linux**（开发环境为 Ubuntu GNOME **Wayland**；X11 亦可，功能降级见下）
 - Python 3.12（由 uv 管理）
 - 可选 NVIDIA GPU（Whisper 自动检测，无显卡回退 CPU int8）
 
-### 系统依赖
+### 系统依赖（仅 Linux）
 
 ```bash
 sudo apt install -y libportaudio2 libxcb-xinerama0
@@ -24,8 +24,17 @@ sudo apt install -y python3-gi gir1.2-gstreamer-1.0 gstreamer1.0-pipewire
 - `libportaudio2`：音频采集（sounddevice）
 - `libxcb-xinerama0`：PyQt5 xcb 插件运行库
 - gi/GStreamer 三件套：Wayland 下 PipeWire 静默截屏。缺失时回退 `gnome-screenshot`（有闪光灯效）
+- Windows 无需任何系统依赖；截屏自动走 Pillow `ImageGrab`，PipeWire 后端不会加载
 
 ### 安装
+
+**Windows：**
+
+```bash
+uv sync
+```
+
+**Linux：**
 
 ```bash
 # venv 必须带 --system-site-packages，否则用不上系统的 gi（静默截屏失效）
@@ -59,7 +68,8 @@ uv run python -c "from faster_whisper import WhisperModel; WhisperModel('small',
 uv run python main.py
 ```
 
-首次运行会弹一次 GNOME 屏幕共享授权框（PipeWire 截屏），点允许后永久静默，授权 token 存于 `pw_restore_token`（删除该文件可重新授权）。`Ctrl+C` 退出。
+- Linux Wayland 首次运行会弹一次 GNOME 屏幕共享授权框（PipeWire 截屏），点允许后永久静默，授权 token 存于 `pw_restore_token`（删除该文件可重新授权）。`Ctrl+C` 退出。
+- Windows 无此授权流程；`Ctrl+C` 退出。
 
 ## 玩法
 
@@ -82,7 +92,7 @@ ui.py          # DeskFriend 窗口：气泡、输入框、动画、消息调度
 pw_capture.py  # Wayland 静默截屏后端（ScreenCast Portal + PipeWire + GStreamer）
 assets/        # 贴图 + VAD 模型
 tests/         # pytest 用例
-DEVELOPMENT.md # 开发文档：技术决策、路线图、验收标准
+docs/          # 开发文档：DEVELOPMENT.md（技术决策）、dev-journey.md（魔改历程）
 ```
 
 ## 开发

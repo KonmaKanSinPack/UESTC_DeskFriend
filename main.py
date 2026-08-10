@@ -2,6 +2,10 @@ import asyncio
 import signal
 import sys
 
+# Windows 下必须先加载 onnxruntime 再加载 PyQt5，否则 Qt 的 DLL 会遮蔽
+# onnxruntime 依赖的同名 DLL，导致 onnxruntime_pybind11_state 导入失败
+import onnxruntime  # noqa: F401
+
 import qasync
 from PyQt5.QtWidgets import QApplication
 
