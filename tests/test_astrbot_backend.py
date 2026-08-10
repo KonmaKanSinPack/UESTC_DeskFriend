@@ -99,6 +99,25 @@ class TestLookAtScreenProtocol:
         assert len(backend.bridge.sent) == 1
 
 
+class TestLifecycle:
+    def test_constructs_before_loop_running(self):
+        """回归：qasync 时序——loop 已 set 但未 run 时构造后端不崩溃。
+
+        main.py 在 `loop.run_forever()` 之前就构造 DeskFriend（内部创建 Brain），
+        后台任务必须挂在"已设置但未运行"的 loop 上；
+        曾用 get_running_loop() → RuntimeError: no running event loop（真机启动崩溃）。
+        """
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            backend = AstrBotBackend(url="ws://127.0.0.1:1", enable_observer=True)
+            # 构造不抛错即通过
+        finally:
+            loop.run_until_complete(backend.stop())
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
 class TestWakeRules:
     def test_reply_judgement_via_local_rules(self, backend):
         judge = [{"role": "user", "content": "用户的消息是：糯糯你在吗"}]

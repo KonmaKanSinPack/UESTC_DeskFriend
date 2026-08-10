@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 # 未知动作返回 ok + 空数据（比 retcode=1002 更能避免适配器重试刷屏）
 
 
+def current_loop():
+    """拿到当前线程的事件循环。
+
+    优先返回**运行中**的 loop；没有运行中 loop 时回退到已设置（set_event_loop）的 loop。
+    回退分支对应 qasync 的时序：main.py 在 `loop.run_forever()` 之前就构造 DeskFriend
+    （内部创建 Brain/后台任务），此时 loop 已 set 但未运行，`get_running_loop()` 会抛
+    RuntimeError（曾在真机启动时踩到）。
+    """
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.get_event_loop()
+
+
 def extract_message_text(message):
     """从 OneBot message 字段提取纯文本：str 原样返回，segments 数组拼 text 段。"""
     if isinstance(message, str):
@@ -71,7 +85,7 @@ class OneBotBridge:
         """启动常驻连接循环（幂等）。断线按 1→30s 指数退避自动重连。"""
         if self._task is None or self._task.done():
             self._stop = False
-            self._task = asyncio.get_running_loop().create_task(self._run())
+            self._task = current_loop().create_task(self._run())
 
     async def stop(self):
         """停止连接循环（幂等）：取消常驻任务并等它退出、结算在飞请求。"""
@@ -87,9 +101,9 @@ class OneBotBridge:
     async def ensure_connected(self, wait=5.0):
         """等待连接就绪（含首次连接），超时抛 ConnectionError。"""
         self.start()
-        deadline = asyncio.get_running_loop().time() + wait
+        deadline = current_loop().time() + wait
         while self._ws is None:
-            if asyncio.get_running_loop().time() > deadline:
+            if current_loop().time() > deadline:
                 raise ConnectionError(f"无法连接 AstrBot OneBot 通道：{self.url}")
             await asyncio.sleep(0.1)
 
@@ -158,7 +172,7 @@ class OneBotBridge:
                 "age": 0,
             },
         }
-        fut = asyncio.get_running_loop().create_future()
+        fut = current_loop().create_future()
         if self._pending_fut is not None:  # 理论不会发生（ui 串行），防御性清理
             self._cancel_pending()
         self._pending_fut = fut
@@ -217,7 +231,7 @@ class OneBotBridge:
         resp = {"status": "ok", "retcode": 0, "data": data}
         if req.get("echo") is not None:
             resp["echo"] = req["echo"]
-        asyncio.get_running_loop().create_task(self._ws.send(json.dumps(resp, ensure_ascii=False)))
+        current_loop().create_task(self._ws.send(json.dumps(resp, ensure_ascii=False)))
 
     # ---------- 回复结算（静默窗口） ----------
 
@@ -226,7 +240,7 @@ class OneBotBridge:
         self._latest_text = text
         if self._settle_task is not None:
             self._settle_task.cancel()
-        self._settle_task = asyncio.get_running_loop().create_task(self._settle_after(self.settle))
+        self._settle_task = current_loop().create_task(self._settle_after(self.settle))
 
     async def _settle_after(self, delay):
         await asyncio.sleep(delay)

@@ -12,7 +12,7 @@
 import asyncio
 import re
 
-from onebot_bridge import OneBotBridge
+from onebot_bridge import OneBotBridge, current_loop
 
 from .base import BackendResponse, ReplyBackend
 
@@ -169,7 +169,7 @@ class AstrBotBackend(ReplyBackend):
         self._stop = False
         self._observe_task = None
         if enable_observer:
-            self._observe_task = asyncio.get_running_loop().create_task(self._observe_loop())
+            self._observe_task = current_loop().create_task(self._observe_loop())
 
     async def stop(self):
         """停止观察循环与 bridge（幂等）：进程退出/测试收尾时调用。"""
@@ -190,7 +190,7 @@ class AstrBotBackend(ReplyBackend):
         - 文本命中屏幕关键词 → 本地截屏附图
         - 回复含 [look_at_screen] → 截屏附图追问（≤3 轮），返回最终回复
         """
-        loop = asyncio.get_running_loop()
+        loop = current_loop()
         self._active_until = loop.time() + ACTIVE_AFTER_CHAT  # 对话后进入活跃观察
         self._last_user_at = loop.time()
 
