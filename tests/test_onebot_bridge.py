@@ -11,7 +11,7 @@ import json
 
 from websockets.asyncio.server import serve
 
-from onebot_bridge import OneBotBridge, extract_message_text
+from onebot_bridge import OneBotBridge, extract_forward_nodes_text, extract_message_text
 
 TEST_TOKEN = "test-token"
 
@@ -252,6 +252,46 @@ def test_image_segment_in_event():
     asyncio.run(run())
 
 
+def test_forward_msg_action_extracts_nodes_and_replies():
+    """合并转发动作（Splitter 类插件用它打包多条消息）：node 文本拼接进结算，回规范 message_id。
+
+    曾踩坑：把 send_private_forward_msg 当未知动作回空 ok → AstrBot 侧拿不到有效
+    data → Splitter 报"发送失败"。
+    """
+
+    async def run():
+        async def handler(ws):
+            evt = await _wait_message_event(ws)
+            assert evt["message"][0]["data"]["text"] == "测试长回复"
+            nodes = [
+                {
+                    "type": "node",
+                    "data": {"uin": 10001, "name": "桃桃", "content": [{"type": "text", "data": {"text": "第一段"}}]},
+                },
+                {
+                    "type": "node",
+                    "data": {"uin": 10001, "name": "桃桃", "content": [{"type": "text", "data": {"text": "第二段"}}]},
+                },
+            ]
+            await ws.send(_action("send_private_forward_msg", {"user_id": 1063310598, "messages": nodes}, echo="e1"))
+            resp = json.loads(await ws.recv())
+            assert resp["status"] == "ok"
+            assert resp["echo"] == "e1"
+            assert isinstance(resp["data"]["message_id"], int)
+            await asyncio.sleep(0.3)  # 保持连接，等静默窗口结算完再断开
+
+        server, port = await _start_server(handler)
+        bridge = _make_bridge(port)
+        reply = await bridge.send_message([{"type": "text", "data": {"text": "测试长回复"}}])
+        await bridge.stop()
+        server.close()
+        await server.wait_closed()
+
+        assert reply == "第一段\n第二段"
+
+    asyncio.run(run())
+
+
 class TestExtractMessageText:
     def test_str_passthrough(self):
         assert extract_message_text("直接文本") == "直接文本"
@@ -267,3 +307,29 @@ class TestExtractMessageText:
     def test_non_text(self):
         assert extract_message_text([{"type": "image", "data": {"file": "x"}}]) == ""
         assert extract_message_text(None) == ""
+
+
+class TestExtractForwardNodes:
+    def test_nodes_joined_by_newline(self):
+        nodes = [
+            {"type": "node", "data": {"content": [{"type": "text", "data": {"text": "甲"}}]}},
+            {
+                "type": "node",
+                "data": {
+                    "content": [{"type": "text", "data": {"text": "乙"}}, {"type": "text", "data": {"text": "丙"}}]
+                },
+            },
+        ]
+        assert extract_forward_nodes_text(nodes) == "甲\n乙丙"
+
+    def test_empty_and_non_list(self):
+        assert extract_forward_nodes_text([]) == ""
+        assert extract_forward_nodes_text(None) == ""
+        assert extract_forward_nodes_text([{"type": "text", "data": {"text": "不是节点"}}]) == ""
+
+    def test_node_without_text_skipped(self):
+        nodes = [
+            {"type": "node", "data": {"content": [{"type": "image", "data": {"file": "x"}}]}},
+            {"type": "node", "data": {"content": [{"type": "text", "data": {"text": "只有这句"}}]}},
+        ]
+        assert extract_forward_nodes_text(nodes) == "只有这句"

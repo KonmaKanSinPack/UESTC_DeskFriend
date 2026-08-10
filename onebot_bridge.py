@@ -53,6 +53,23 @@ def extract_message_text(message):
     return ""
 
 
+def extract_forward_nodes_text(messages):
+    """从合并转发动作的 messages（Node 数组）提取全部文本，逐条用换行拼接。
+
+    合并转发（send_private_forward_msg 等）在 QQ 里是一条可点开的转发卡片，
+    桌宠气泡无法表达卡片，只能把各 node 的文本拼起来展示。
+    """
+    parts = []
+    if isinstance(messages, list):
+        for seg in messages:
+            if isinstance(seg, dict) and seg.get("type") == "node":
+                content = seg.get("data", {}).get("content")
+                text = extract_message_text(content)
+                if text:
+                    parts.append(text)
+    return "\n".join(parts)
+
+
 class OneBotBridge:
     """OneBot 11 反向 WS 客户端：常驻连接 + 心跳 + 消息上报 + 动作响应 + 回复结算。"""
 
@@ -215,6 +232,13 @@ class OneBotBridge:
         if action in ("send_private_msg", "send_group_msg", "send_msg"):
             # 桃桃的回复：文本进结算，图片等非文本部分丢弃
             text = extract_message_text(params.get("message"))
+            if text:
+                self._on_reply(text)
+            self._reply(req, {"message_id": random.randint(100000, 999999)})
+        elif action in ("send_private_forward_msg", "send_group_forward_msg", "send_forward_msg"):
+            # 合并转发（Splitter 等插件用它打包多条消息）：各 node 文本拼接进结算，
+            # 返回规范要求的 message_id，否则 AstrBot 侧拿不到有效 data 会报"发送失败"
+            text = extract_forward_nodes_text(params.get("messages"))
             if text:
                 self._on_reply(text)
             self._reply(req, {"message_id": random.randint(100000, 999999)})
