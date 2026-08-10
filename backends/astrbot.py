@@ -156,6 +156,7 @@ class AstrBotBackend(ReplyBackend):
 
         self.judge = judge  # LLM 决策器（should_reply 判定），由工厂注入
         self.reply_sink = None  # ui 挂的回调：主动冒泡显示（brain 门面转发）
+        self.interruption = None  # TTS 朗读被打断的位置（brain.set_interruption 注入，用后清除）
         self._last_phash = None  # 上次观察到的屏幕哈希
         self._last_proactive_at = 0.0  # 上次主动观察时间
         self._last_user_at = 0.0  # 上次用户消息时间
@@ -189,6 +190,13 @@ class AstrBotBackend(ReplyBackend):
         loop = current_loop()
         self._active_until = loop.time() + ACTIVE_AFTER_CHAT  # 对话后进入活跃观察
         self._last_user_at = loop.time()
+
+        # 打断标记注入：用户上次朗读被打断时，让桃桃知道说到哪了（用后清除）。
+        # 仅对话主通道（str 消息）注入；should_reply 判定不受影响。
+        if self.interruption and isinstance(message, str):
+            prefix = self.interruption
+            self.interruption = None
+            message = f"[对话被打断] 你刚才说到『{prefix}』处被打断了。用户现在说：{message}"
 
         segments = self._msg_to_segments(message)
         text = "".join(s["data"].get("text", "") for s in segments if s.get("type") == "text")

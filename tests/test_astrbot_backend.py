@@ -70,6 +70,22 @@ class TestConversation:
         assert resp.tool_calls == []
         assert backend.bridge.sent == [[{"type": "text", "data": {"text": "你好"}}]]
 
+    def test_interruption_marker_injected_and_cleared(self, backend):
+        """TTS 朗读被打断 → 打断位置注入对话消息（让桃桃知道说到哪），用后清除。"""
+        backend.interruption = "你刚才说到第一句"
+        backend.bridge.replies = ["好，你说"]
+        resp = asyncio.run(backend.get_llm_response("我继续说"))
+        assert "对话被打断" in backend.bridge.sent[0][0]["data"]["text"]
+        assert "你刚才说到第一句" in backend.bridge.sent[0][0]["data"]["text"]
+        assert "我继续说" in backend.bridge.sent[0][0]["data"]["text"]
+        assert backend.interruption is None  # 用后清除
+        assert resp.content == "好，你说"
+
+    def test_no_interruption_marker_when_clean(self, backend):
+        backend.bridge.replies = ["好"]
+        asyncio.run(backend.get_llm_response("正常消息"))
+        assert "对话被打断" not in backend.bridge.sent[0][0]["data"]["text"]
+
     def test_image_message_converted(self, backend):
         backend.bridge.replies = ["看到了"]
         img_msg = pack_msg("user", "image_url", "data:image/png;base64,BBBB")

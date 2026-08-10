@@ -55,6 +55,15 @@ class Brain:
         if stop is not None:
             await stop()
 
+    def set_interruption(self, prefix: str):
+        """记录 TTS 朗读被打断的位置（已播放文本前缀）。
+
+        由 ui 在用户新消息打断朗读时调用；astrbot 后端下次对话时把它
+        注入消息上下文（让桃桃知道"说到哪被打断了"），用后清除。
+        """
+        if prefix and hasattr(self.backend, "interruption"):
+            self.backend.interruption = prefix
+
     @property
     def reply_sink(self):
         """主动冒泡回调：后端（astrbot 的屏幕感知）有值得说的话时调用，ui 挂 show_bubble。"""

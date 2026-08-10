@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
 from backends.judger import JUDGE_SYSTEM_PROMPT
 from brain import Brain, pack_msg, parse_tool_args
 from listen import Listen
+from tts import create_tts
 from vision import Vision
 
 PROJECT_DIR = Path(__file__).parent
@@ -90,6 +91,7 @@ class DeskFriend(QWidget):
         self.brain.reply_sink = self.show_bubble
         self.vision = Vision()
         self.listen = Listen()
+        self.tts = create_tts(load_config())  # 语音输出（朗读 + 打断）
 
         # 连接听觉信号到处理函数
         self.listen.text_signal.connect(self.on_heard_text)  # 发射器.信号.connect(接收器)
@@ -141,6 +143,8 @@ class DeskFriend(QWidget):
         print(response.content)
         self._anim_state = "talking"
         self.show_bubble(response.content)
+        # 朗读回复（异步不阻塞对话队列；TTS 后端由 config 选择）
+        asyncio.get_event_loop().create_task(self.tts.speak(response.content))
         # 回复已展示，再后台做记忆压缩（超限时把最老轮次并入摘要，失败不影响对话）
         await self.brain.maybe_compress()
         # 批量抽取自上次以来的事实（含此前攒下的背景谈话，失败不影响对话）
@@ -175,6 +179,17 @@ class DeskFriend(QWidget):
             offset = QPoint(0, round(2 * math.sin(self._anim_phase)))  # 缓慢呼吸
         self.move(self._base_pos + offset)
 
+    def _interrupt_tts(self):
+        """用户新消息到达：打断朗读并记录打断位置（异步不阻塞入队）。"""
+        if self.tts.busy:
+            asyncio.get_event_loop().create_task(self._interrupt_tts_async())
+
+    async def _interrupt_tts_async(self):
+        prefix = await self.tts.interrupt()
+        if prefix:
+            self.brain.set_interruption(prefix)
+            print(f"朗读被打断，记录位置：…{prefix[-15:]}")
+
     def on_input_submitted(self):
         text = self.input_box.text().strip()
         self.input_box.clear()
@@ -183,6 +198,7 @@ class DeskFriend(QWidget):
         if not text:
             return
         print(f"接收到文字消息：{text}")
+        self._interrupt_tts()  # 打断朗读，记录打断位置
         try:
             self.message_queue.put_nowait(text)
             self.show_bubble("听到了，正在想…", timeout_ms=60000)
@@ -232,6 +248,7 @@ class DeskFriend(QWidget):
     @qasync.asyncSlot(str)
     async def on_heard_text(self, text):
         print(f"接收到听觉消息：{text}")
+        self._interrupt_tts()  # 打断朗读，记录打断位置
         try:
             self.message_queue.put_nowait(text)  # 忙碌时也入队，等消费者空闲后处理
             self.show_bubble("听到了，正在想…", timeout_ms=60000)
