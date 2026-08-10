@@ -44,6 +44,17 @@ def _get_pw_capture():
     return _pw_capture
 
 
+def capture_screen_to_image_url():
+    """截屏并打包成 data URL（`data:image/png;base64,...`）；截屏后端未就绪返回 None。
+
+    astrbot 后端用它做本地截屏：屏幕关键词触发 / [look_at_screen] 协议 / 主动观察。
+    """
+    shot = grab_screenshot()
+    if shot is None:
+        return None
+    return f"data:image/png;base64,{pil_image_to_base64(shot)}"
+
+
 def grab_screenshot():
     """截一张全屏图，返回 PIL.Image；PipeWire 初始化窗口期返回 None 表示跳过本次。
 

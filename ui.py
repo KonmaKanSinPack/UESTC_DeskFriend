@@ -85,6 +85,8 @@ class DeskFriend(QWidget):
 
         # 器官部分
         self.brain = Brain()
+        # 主动冒泡回调：astrbot 后端（屏幕感知）发现值得说的话时直接显示气泡
+        self.brain.reply_sink = self.show_bubble
         self.vision = Vision()
         self.listen = Listen()
 
@@ -122,10 +124,9 @@ class DeskFriend(QWidget):
 
     async def do_response(self, message):
         response = await self.brain.get_llm_response(message)
-        resp_message = response.choices[0].message
-        while resp_message.tool_calls:
-            tool_call = resp_message.tool_calls[0]
-            print(f"接收到军师指令，准备运行: {tool_call.function.name}")
+        while response.tool_calls:
+            tool_call = response.tool_calls[0]
+            print(f"接收到军师指令，准备运行: {tool_call.name}")
             tool_result, extra_msg = await self.tool_executer(tool_call)
 
             # 按照标准格式，把执行结果打包；tool 消息必须紧跟 assistant 的 tool_calls，
@@ -135,11 +136,10 @@ class DeskFriend(QWidget):
 
             # 第二次通信：带着结果回去要最终回复
             response = await self.brain.get_llm_response(msgs)
-            resp_message = response.choices[0].message
 
-        print(resp_message.content)
+        print(response.content)
         self._anim_state = "talking"
-        self.show_bubble(resp_message.content)
+        self.show_bubble(response.content)
         # 回复已展示，再后台做记忆压缩（超限时把最老轮次并入摘要，失败不影响对话）
         await self.brain.maybe_compress()
         # 批量抽取自上次以来的事实（含此前攒下的背景谈话，失败不影响对话）
@@ -198,9 +198,9 @@ class DeskFriend(QWidget):
         return super().eventFilter(obj, event)
 
     async def tool_executer(self, tool_call):
-        # target_method = getattr(self, tool_call.function.name)
-        func_name = tool_call.function.name
-        _args_dict = parse_tool_args(tool_call.function.arguments)  # 目前工具都无参数，解析以备后续扩展
+        # tool_call 是统一 ToolCall 对象（openai 后端归一化而来；astrbot 后端不产生工具调用）
+        func_name = tool_call.name
+        _args_dict = parse_tool_args(tool_call.arguments)  # 目前工具都无参数，解析以备后续扩展
 
         if func_name == "look_at_screen":
             result = await self.vision.look_at_screen()
@@ -224,8 +224,7 @@ class DeskFriend(QWidget):
 
             response = await self.brain.get_response_with_context(judge_context)
 
-            content = response.choices[0].message.content or ""
-            reply_decision = content.strip().lower()
+            reply_decision = response.content.strip().lower()
             return reply_decision == "true"
         except Exception as e:
             print(f"判断是否回复时出错了：{e}")

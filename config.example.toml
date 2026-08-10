@@ -1,6 +1,29 @@
 # 复制为 config.toml 并填入自己的值
-API_KEY = "sk-..."
-BASE_URL = "https://api.example.com/v1"
+
+# 回复后端：astrbot（默认，经 AstrBot 对话流，记忆/人格由 AstrBot 接管）/ openai（直连 LLM + 自建记忆）
+BACKEND = "astrbot"
+
+# ---- astrbot 后端（OneBot 11 伪装通道）----
+ASTRBOT_WS_URL = "ws://127.0.0.1:20081/api"  # AstrBot OneBot 适配器的反向 WebSocket 地址
+ASTRBOT_WS_TOKEN = ""  # 反向 WS token（经 Authorization: Bearer 头发送；没有则留空）
+ASTRBOT_USER_ID = 1063310598  # 伪装消息的发送者 id（桃桃认识的老公）
+ASTRBOT_SELF_ID = 10001  # 伪装的 OneBot 机器人自身 id（get_login_info 返回）
+ASTRBOT_TIMEOUT = 90.0  # 等桃桃回复的总超时（秒）
+# 回复静默判定（秒）：AstrBot 可能连发多条回复（如「回复中提示」占位 + 最终回复），
+# 收到一条后等这么久没有新回复才视为最终回复（取最后一条）。
+# 若 AstrBot 开了「回复中提示」，此值需 ≥ 提示与最终回复的间隔；关掉提示可设 0.5
+ASTRBOT_SETTLE = 2.0
+
+# ---- 屏幕感知（astrbot 后端的主动观察）----
+SCREEN_IDLE_INTERVAL = 60  # idle 态观察周期（秒）
+SCREEN_ACTIVE_INTERVAL = 20  # active 态（对话后 2 分钟内）观察周期（秒）
+SCREEN_CHANGE_THRESHOLD = 0.05  # 屏幕变化幅度阈值（16×16 感知哈希归一化距离，0~1）
+SCREEN_COOLDOWN = 180  # 主动观察冷却（秒），防止过度打扰
+SCREEN_USER_SILENCE = 120  # 距上次用户输入的最小静默（秒），用户操作屏幕时不偷看
+
+# ---- openai 后端（直连模式，切 BACKEND = "openai" 时使用）----
+# API_KEY = "sk-..."
+# BASE_URL = "https://api.example.com/v1"
 
 # 可选：自定义系统提示词（人设）。不填则使用内置的糯糯人设。
 # SYSTEM_PROMPT = "你是糯糯，一只Q版弗洛洛毛绒玩偶形态的桌面AI伙伴……"

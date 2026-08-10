@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from brain import MAX_FACTS, Brain, parse_fact_ops
+from backends.openai import MAX_FACTS, OpenAIBackend, parse_fact_ops
 from memory import KEEP_RECENT_TURNS, MAX_CONTEXT_TURNS, MemoryStore, render_messages, sanitize_message
 
 
@@ -99,71 +99,80 @@ class _StubClient:
 
 
 @pytest.fixture()
-def brain(tmp_path):
-    return Brain(client=_StubClient(), db_path=tmp_path / "pet.db")
+def backend(tmp_path):
+    """openai 回复后端（原 Brain 直连模式的载体），注入假 LLM 客户端。"""
+    return OpenAIBackend(client=_StubClient(), db_path=tmp_path / "pet.db")
 
 
-class TestBrainMemory:
-    def test_messages_persisted_with_turns(self, brain):
+class TestOpenAIBackend:
+    """openai 后端的记忆管道（原 TestBrainMemory 迁移）：对话落库、重启恢复、摘要压缩、背景谈话。"""
+
+    def test_messages_persisted_with_turns(self, backend):
         async def run():
-            await brain.get_llm_response("你好")
-            await brain.get_llm_response("我叫小明")
+            await backend.get_llm_response("你好")
+            await backend.get_llm_response("我叫小明")
 
         asyncio.run(run())
-        msgs = brain.memory.load_unsummarized()
+        msgs = backend.memory.load_unsummarized()
         assert [m["content"] for m in msgs] == ["你好", "好的", "我叫小明", "好的"]
-        assert brain.memory.unsummarized_turn_count() == 2
+        assert backend.memory.unsummarized_turn_count() == 2
 
-    def test_restart_restores_context(self, brain, tmp_path):
-        asyncio.run(brain.get_llm_response("记住我叫小明"))
-        # 模拟重启：同一个 db 新建 Brain
-        brain2 = Brain(client=_StubClient(), db_path=tmp_path / "pet.db")
-        assert [m["content"] for m in brain2.context] == ["记住我叫小明", "好的"]
-        assert brain2.turn_id == brain.turn_id
+    def test_restart_restores_context(self, backend, tmp_path):
+        asyncio.run(backend.get_llm_response("记住我叫小明"))
+        # 模拟重启：同一个 db 新建后端
+        backend2 = OpenAIBackend(client=_StubClient(), db_path=tmp_path / "pet.db")
+        assert [m["content"] for m in backend2.context] == ["记住我叫小明", "好的"]
+        assert backend2.turn_id == backend.turn_id
 
-    def test_compress_not_triggered_below_limit(self, brain):
+    def test_compress_not_triggered_below_limit(self, backend):
         async def run():
-            await brain.get_llm_response("你好")
-            await brain.maybe_compress()
+            await backend.get_llm_response("你好")
+            await backend.maybe_compress()
 
         asyncio.run(run())
-        assert brain.summary is None
-        assert len(brain.context) == 2
+        assert backend.summary is None
+        assert len(backend.context) == 2
 
-    def test_compress_merges_old_turns(self, brain):
+    def test_compress_merges_old_turns(self, backend):
         async def run():
             for i in range(MAX_CONTEXT_TURNS + 1):
-                await brain.get_llm_response(f"第{i + 1}轮")
-            await brain.maybe_compress()
+                await backend.get_llm_response(f"第{i + 1}轮")
+            await backend.maybe_compress()
 
         asyncio.run(run())
         # 摘要已更新，旧轮次被标记压缩，内存只留最近 KEEP_RECENT_TURNS 轮（每轮 user+assistant 两条）
-        assert brain.summary == "好的"
-        assert brain.memory.unsummarized_turn_count() == KEEP_RECENT_TURNS
-        assert len(brain.context) == KEEP_RECENT_TURNS * 2
-        assert brain.context[0]["content"] == f"第{MAX_CONTEXT_TURNS + 2 - KEEP_RECENT_TURNS}轮"
+        assert backend.summary == "好的"
+        assert backend.memory.unsummarized_turn_count() == KEEP_RECENT_TURNS
+        assert len(backend.context) == KEEP_RECENT_TURNS * 2
+        assert backend.context[0]["content"] == f"第{MAX_CONTEXT_TURNS + 2 - KEEP_RECENT_TURNS}轮"
 
-    def test_summary_injected_into_messages(self, brain):
-        brain.summary = "用户叫小明"
-        messages = brain._build_messages()
+    def test_summary_injected_into_messages(self, backend):
+        backend.summary = "用户叫小明"
+        messages = backend._build_messages()
         assert messages[0]["role"] == "system"
         assert "用户叫小明" in messages[1]["content"]
 
-    def test_memorize_stores_without_reply(self, brain):
-        brain.memorize("我下周三要交实验报告")
-        msgs = brain.memory.load_unsummarized()
+    def test_memorize_stores_without_reply(self, backend):
+        backend.memorize("我下周三要交实验报告")
+        msgs = backend.memory.load_unsummarized()
         assert len(msgs) == 1
         assert "我下周三要交实验报告" in msgs[0]["content"]
         assert "[背景谈话" in msgs[0]["content"]
-        assert brain.memory.unsummarized_turn_count() == 1
+        assert backend.memory.unsummarized_turn_count() == 1
 
-    def test_memorize_then_reply_keeps_order_and_turns(self, brain):
-        brain.memorize("背景谈话一句")
-        asyncio.run(brain.get_llm_response("糯糯你在吗"))
-        contents = [m["content"] for m in brain.context]
+    def test_memorize_then_reply_keeps_order_and_turns(self, backend):
+        backend.memorize("背景谈话一句")
+        asyncio.run(backend.get_llm_response("糯糯你在吗"))
+        contents = [m["content"] for m in backend.context]
         assert contents == ["[背景谈话，无需回应] 背景谈话一句", "糯糯你在吗", "好的"]
         # 背景记忆占独立轮次，后续回复开启新一轮
-        assert brain.memory.unsummarized_turn_count() == 2
+        assert backend.memory.unsummarized_turn_count() == 2
+
+    def test_response_normalized(self, backend):
+        """返回值归一为 BackendResponse（无 tool_calls），ui 契约稳定。"""
+        response = asyncio.run(backend.get_llm_response("你好"))
+        assert response.content == "好的"
+        assert response.tool_calls == []
 
 
 class TestFacts:
@@ -196,46 +205,46 @@ class TestFacts:
         assert parse_fact_ops('{"operations": "not a list"}') == []
         assert parse_fact_ops('{"operations": [{"op": "add"}, "junk", null]}') == [{"op": "add"}]
 
-    def test_extract_adds_fact_and_advances_cursor(self, brain):
-        brain.client.reply = '{"operations": [{"op": "add", "content": "用户在 UESTC 读书"}]}'
+    def test_extract_adds_fact_and_advances_cursor(self, backend):
+        backend.client.reply = '{"operations": [{"op": "add", "content": "用户在 UESTC 读书"}]}'
 
         async def run():
-            await brain.get_llm_response("我在 UESTC 读书")
-            await brain.maybe_extract_facts()
+            await backend.get_llm_response("我在 UESTC 读书")
+            await backend.maybe_extract_facts()
             # 没有新轮次时不重复抽取、不重复落库
-            await brain.maybe_extract_facts()
+            await backend.maybe_extract_facts()
 
         asyncio.run(run())
-        assert [c for _, c in brain.memory.get_facts()] == ["用户在 UESTC 读书"]
-        assert brain.memory.get_meta("last_extracted_turn") == str(brain.turn_id)
+        assert [c for _, c in backend.memory.get_facts()] == ["用户在 UESTC 读书"]
+        assert backend.memory.get_meta("last_extracted_turn") == str(backend.turn_id)
 
-    def test_extract_bad_output_discarded(self, brain):
-        brain.client.reply = "胡说八道"
+    def test_extract_bad_output_discarded(self, backend):
+        backend.client.reply = "胡说八道"
 
         async def run():
-            await brain.get_llm_response("你好")
-            await brain.maybe_extract_facts()
+            await backend.get_llm_response("你好")
+            await backend.maybe_extract_facts()
 
         asyncio.run(run())
-        assert brain.memory.get_facts() == []
+        assert backend.memory.get_facts() == []
         # 游标照常推进，不会反复重试同一批
-        assert brain.memory.get_meta("last_extracted_turn") == str(brain.turn_id)
+        assert backend.memory.get_meta("last_extracted_turn") == str(backend.turn_id)
 
-    def test_extract_covers_memorized_turns(self, brain):
-        brain.memorize("我下周三要交实验报告")
-        brain.client.reply = '{"operations": [{"op": "add", "content": "用户下周三要交实验报告"}]}'
+    def test_extract_covers_memorized_turns(self, backend):
+        backend.memorize("我下周三要交实验报告")
+        backend.client.reply = '{"operations": [{"op": "add", "content": "用户下周三要交实验报告"}]}'
 
         async def run():
-            await brain.get_llm_response("糯糯你在吗")
-            await brain.maybe_extract_facts()
+            await backend.get_llm_response("糯糯你在吗")
+            await backend.maybe_extract_facts()
 
         asyncio.run(run())
-        assert [c for _, c in brain.memory.get_facts()] == ["用户下周三要交实验报告"]
+        assert [c for _, c in backend.memory.get_facts()] == ["用户下周三要交实验报告"]
 
-    def test_apply_fact_ops_validation(self, brain):
-        brain.memory.add_fact("旧事实")
-        fid = brain.memory.get_facts()[0][0]
-        brain._apply_fact_ops(
+    def test_apply_fact_ops_validation(self, backend):
+        backend.memory.add_fact("旧事实")
+        fid = backend.memory.get_facts()[0][0]
+        backend._apply_fact_ops(
             [
                 {"op": "update", "id": fid, "content": "新事实"},
                 {"op": "update", "id": 999, "content": "不存在的 id"},
@@ -244,23 +253,23 @@ class TestFacts:
                 {"op": "unknown"},
             ]
         )
-        assert brain.memory.get_facts() == []
+        assert backend.memory.get_facts() == []
 
-    def test_facts_injected_into_messages(self, brain):
-        brain.memory.add_fact("用户叫小明")
-        messages = brain._build_messages()
+    def test_facts_injected_into_messages(self, backend):
+        backend.memory.add_fact("用户叫小明")
+        messages = backend._build_messages()
         assert any("用户叫小明" in m["content"] for m in messages[:2])
 
-    def test_merge_facts_over_limit(self, brain):
+    def test_merge_facts_over_limit(self, backend):
         for i in range(MAX_FACTS + 1):
-            brain.memory.add_fact(f"事实{i}")
-        brain.client.reply = '["合并事实1", "合并事实2"]'
-        asyncio.run(brain._maybe_merge_facts())
-        assert [c for _, c in brain.memory.get_facts()] == ["合并事实1", "合并事实2"]
+            backend.memory.add_fact(f"事实{i}")
+        backend.client.reply = '["合并事实1", "合并事实2"]'
+        asyncio.run(backend._maybe_merge_facts())
+        assert [c for _, c in backend.memory.get_facts()] == ["合并事实1", "合并事实2"]
 
-    def test_merge_bad_output_keeps_original(self, brain):
+    def test_merge_bad_output_keeps_original(self, backend):
         for i in range(MAX_FACTS + 1):
-            brain.memory.add_fact(f"事实{i}")
-        brain.client.reply = "不是json"
-        asyncio.run(brain._maybe_merge_facts())
-        assert len(brain.memory.get_facts()) == MAX_FACTS + 1
+            backend.memory.add_fact(f"事实{i}")
+        backend.client.reply = "不是json"
+        asyncio.run(backend._maybe_merge_facts())
+        assert len(backend.memory.get_facts()) == MAX_FACTS + 1
