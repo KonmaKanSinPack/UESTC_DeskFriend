@@ -93,6 +93,8 @@ class DeskFriend(QWidget):
         self.listen = Listen()
         self.mouth = Mouth(load_config())  # 发声器官（嘴）：朗读 + 打断 + 回声门控
         self.listen.mouth = self.mouth  # 耳朵引用嘴：朗读期间忽略扬声器回声
+        # 插嘴打断：AEC 收敛后 VAD 触发 → 立即打断（不等转写），复用现有注入链路
+        self.listen.interrupt_requested.connect(self._interrupt_tts)
 
         # 连接听觉信号到处理函数
         self.listen.text_signal.connect(self.on_heard_text)  # 发射器.信号.connect(接收器)

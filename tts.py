@@ -172,6 +172,7 @@ class CosyVoice2TTS(TTS):
         self._played = ""
         self._speaking_text = ""  # 本次朗读全文（interrupt 防误报用）
         self._stop_event = None
+        self.ref_callback = None  # 播放音频上报钩子（Mouth 注入，AEC far-end 参考）
 
     def _load(self):
         """惰性加载模型与参考音频（同步；调用方负责丢线程）。"""
@@ -222,6 +223,8 @@ class CosyVoice2TTS(TTS):
                 if self._stop_event.is_set():
                     break
                 audio = chunk["tts_speech"].cpu().numpy().flatten()
+                if self.ref_callback is not None:
+                    self.ref_callback(audio, COSYVOICE2_SAMPLE_RATE)  # AEC 参考信号
                 sd.play(audio, samplerate=COSYVOICE2_SAMPLE_RATE)
                 sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
             self._played += sentence  # 该句播放完成（或被中断时已尽力播放）
@@ -279,6 +282,7 @@ class SiliconFlowTTS(TTS):
         self._played = ""
         self._speaking_text = ""  # 本次朗读全文（interrupt 防误报用）
         self._stop_event = None
+        self.ref_callback = None  # 播放音频上报钩子（Mouth 注入，AEC far-end 参考）
 
     def _ref_audio_b64(self):
         """参考音频 base64（data URI）；读一次缓存，避免每次请求读盘。"""
@@ -363,6 +367,8 @@ class SiliconFlowTTS(TTS):
                 seg = int(0.05 * sr)
                 tail_rms = float(np.sqrt(np.mean(np.asarray(audio[-seg:]) ** 2))) if len(audio) else 0.0
                 head_rms = float(np.sqrt(np.mean(np.asarray(audio[:seg]) ** 2))) if len(audio) else 0.0
+                if self.ref_callback is not None:
+                    self.ref_callback(audio, sr)  # AEC 参考信号（播前上报）
                 sd.play(audio, sr)
                 t2 = time.monotonic()
                 sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回

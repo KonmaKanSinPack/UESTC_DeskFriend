@@ -40,13 +40,14 @@
 
 | 器官 | 文件 | 职责（只管这些） | 对外接口 | 事件广播 |
 |------|------|------------------|----------|----------|
-| 耳 | `listen.py` | 采集麦克风 → VAD → Whisper 转写 | `text_signal(str)` | 转写结果 |
-| 嘴 | `mouth.py` | 发声 + 回声门控（内部消化尾巴/try-finally） | `speak(text)` / `interrupt()->前缀` / `busy` / `speaking` | `finished` |
+| 耳 | `listen.py` | 采集 → AEC 消回声 → VAD → Whisper 转写 | `text_signal(str)` | 转写结果、`interrupt_requested`（插嘴） |
+| 嘴 | `mouth.py` | 发声 + 回声门控 + AEC 参考缓冲（内部消化尾巴/try-finally） | `speak(text)` / `interrupt()->前缀` / `busy` / `speaking` / `drain_reference()` / `speak_started_at` | `finished` |
 | 眼 | `vision.py` | 截屏（多后端回退） | `look_at_screen()` | — |
 | 脑 | `brain.py` + `backends/` | 只产回复意图；门卫判定（judger） | `get_llm_response` / `get_response_with_context` | — |
 
 **器官间唯一允许的依赖**：单向、只读状态。例：耳读 `mouth.speaking`
-（嘴在说话时麦克风拾到的是回声 → 耳丢弃）。这是物理层协同，不是业务流程耦合。
+（嘴在说话时麦克风拾到的是回声 → 耳丢弃）与 `mouth.drain_reference()`
+（嘴播放的 PCM 作 AEC far-end 参考，耳只读缓冲）。这是物理层协同，不是业务流程耦合。
 
 ## 三、大脑只输出意图（含工具调用）
 

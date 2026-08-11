@@ -1,26 +1,30 @@
 """Listen 回声门控测试（纯逻辑，不实例化 Listen 以免开麦克风流/加载模型）。
 
-门控规则：TTS 朗读期间麦克风拾到的语音视为扬声器回声——若当真会触发
-on_heard_text → interrupt 打断自己（自反馈回环）。纯函数提取照 astrbot.py
-的 should_observe 模式（便于单测），录音主循环只在关键点调用。
+门控规则（AEC 轮）：VAD 触发时按「嘴是否发声 + AEC 是否就绪且收敛」三分支决策——
+收敛期（或无 AEC）拾到的语音视为回声丢弃；AEC 收敛后残差触发 = 真人插嘴。
+纯函数提取照 astrbot.py 的 should_observe 模式（便于单测），录音主循环只在关键点调用。
 """
 
-from listen import is_echo_trigger, segment_contaminated
+from listen import echo_gate_action, segment_contaminated
 
 
-class TestEchoTrigger:
-    def test_vad_trigger_during_speaking_is_echo(self):
-        assert is_echo_trigger(0.9, speaking=True) is True
+class TestEchoGateAction:
+    def test_not_speaking_normal(self):
+        """嘴未发声：正常录音（无论 AEC 状态）。"""
+        assert echo_gate_action(False, True, True) is None
+        assert echo_gate_action(False, False, False) is None
 
-    def test_vad_trigger_when_silent_is_user_speech(self):
-        assert is_echo_trigger(0.9, speaking=False) is False
+    def test_speaking_without_aec_drops(self):
+        """AEC 不可用 → 回退纯门控：发声期间一律丢弃。"""
+        assert echo_gate_action(True, False, False) == "drop"
 
-    def test_low_score_never_echo(self):
-        assert is_echo_trigger(0.3, speaking=True) is False
+    def test_speaking_during_convergence_drops(self):
+        """AEC 收敛期内 → 仍丢弃（回声可能漏过，旧门控兜底）。"""
+        assert echo_gate_action(True, True, False) == "drop"
 
-    def test_score_boundary_inclusive(self):
-        # VAD 判定阈值为 >= 0.5，回声判定保持一致（边界含等号）
-        assert is_echo_trigger(0.5, speaking=True) is True
+    def test_speaking_after_convergence_barges_in(self):
+        """AEC 已收敛 → 残差触发 = 真人插嘴。"""
+        assert echo_gate_action(True, True, True) == "barge_in"
 
 
 class TestSegmentContaminated:

@@ -206,11 +206,15 @@ astrbot 后端: get_llm_response 注入「[对话被打断] 你刚才说到『{p
   不卡 Qt 事件循环
 - 打断位置只注入对话主通道；should_reply 判定用纯文本不受影响；无未完成朗读时消息纯净
 - **回声门控（防自打断，2026-08-11）**：麦克风永久监听，朗读时扬声器声音会被麦克风拾回，
-  VAD 误判为用户语音 → 打断自己（自反馈回环）。`Listen.speaking` 标志（ui 在 speak 前置位、
-  播完后 0.3s 余响尾巴释放）置位期间 VAD 触发视为回声忽略（不录音不转写）；录音中途桃桃开口
-  的录音段（叠着 TTS 播放）整段丢弃。代价：朗读期间无法语音插嘴（可打字打断）。
-  后续 AEC3 回声消除（`pywebrtc-audio`，TTS PCM 作参考信号）上线后恢复插嘴，
-  门控兼作 AEC 收敛期兜底。
+  VAD 误判为用户语音 → 打断自己（自反馈回环）。Mouth.speaking 门控（含 0.3s 余响尾巴）期间
+  VAD 触发视为回声忽略（不录音不转写）；录音中途桃桃开口的录音段（叠着 TTS 播放）整段丢弃。
+- **AEC3 回声消除（2026-08-11 晚，恢复语音插嘴）**：`pywebrtc-audio`（WebRTC AEC3，16000Hz，
+  `AudioProcessor(echo_cancellation, noise_suppression, stream_delay_ms=150)`）。嘴把播放 PCM
+  tee 进参考缓冲（16k 重采样 + 512 块 + 播放时刻，`Mouth.drain_reference`），耳每 32ms 取块作
+  far-end 参考先消回声再 VAD（`_aec_process`）。门控三分支（`echo_gate_action` 纯函数）：
+  ① 嘴未发声 → 正常录音；② 嘴发声且 AEC 不可用/未收敛（首 1.2s）→ 丢弃（旧门控兜底）；
+  ③ 已收敛 → VAD 残差触发 = 真人插嘴 → `interrupt_requested` 信号 → 主控立即打断（不等转写），
+  本段录音跳过污染检查。import 失败自动回退纯门控。冒烟测试：440Hz 回声功率 2400→0（100% 抑制）。
 
 ### 8.3 配置
 

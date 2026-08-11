@@ -43,6 +43,7 @@ dependencies = [
     "matplotlib>=3.11.1",
     "wget>=3.2",
     "pyarrow>=25.0.1",
+    "pywebrtc-audio>=0.1.0",
 ]
 
 [dependency-groups]
