@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from mouth import SENTENCE_GUARD, SENTENCE_WINDOW, TTS_ECHO_TAIL, Mouth
+from mouth import SENTENCE_GUARD, SENTENCE_WINDOW, TTS_ECHO_TAIL, Mouth, echo_like
 
 
 class FakeTTS:
@@ -21,10 +21,12 @@ class FakeTTS:
         self._busy = False
         self._played = ""
         self.interrupt_calls = 0
+        self.speak_calls = []
 
     async def speak(self, text):
         if self.raise_error:
             raise RuntimeError("后端挂了")
+        self.speak_calls.append(text)
         self._busy = True
         self._played = text
         await asyncio.sleep(self.duration)
@@ -102,6 +104,36 @@ class TestInterrupt:
     def test_busy_and_played_text_delegate(self, mouth):
         assert mouth.busy is mouth.tts.busy
         assert mouth.played_text == mouth.tts.played_text
+
+
+class TestSpeakSerialization:
+    def test_concurrent_speaks_serialize(self):
+        """连续回复（双击/快速消息）按序朗读，不双流叠播。"""
+        fake = FakeTTS(duration=0.05)
+        m = Mouth(tts=fake)
+
+        async def run():
+            await asyncio.gather(m.speak("第一段"), m.speak("第二段"))
+            return fake.speak_calls
+
+        calls = asyncio.run(run())
+        assert calls == ["第一段", "第二段"]  # 按序
+        assert m.speaking is False  # 门控最终释放
+
+
+class TestEchoLike:
+    def test_similar_to_played_is_echo(self):
+        """余响转写（简繁混写）与刚朗读内容相似 → 判回声。"""
+        assert echo_like("桃桃沒有回應", "（桃桃没有回应…）") is True
+
+    def test_identical_is_echo(self):
+        assert echo_like("今天天气不错", "今天天气不错。") is True
+
+    def test_unrelated_not_echo(self):
+        assert echo_like("我们下课去吃饭吧", "今天天气不错，我们一起去公园散步吧。") is False
+
+    def test_empty_played_not_echo(self):
+        assert echo_like("你好", "") is False
 
 
 class TestSentenceWindow:

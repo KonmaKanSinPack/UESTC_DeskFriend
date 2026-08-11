@@ -252,6 +252,10 @@ class DeskFriend(QWidget):
     @qasync.asyncSlot(str)
     async def on_heard_text(self, text):
         print(f"接收到听觉消息：{text}")
+        if self.mouth.is_echo(text):
+            # 播放结束后余响（~1.3s）转写出的就是桃桃刚说的话：内容兜底，丢弃
+            print(f"与刚朗读内容相似（疑似回声），丢弃：{text}")
+            return
         self._interrupt_tts()  # 打断朗读，记录打断位置
         try:
             self.message_queue.put_nowait(text)  # 忙碌时也入队，等消费者空闲后处理

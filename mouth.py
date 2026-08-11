@@ -15,6 +15,8 @@ try/finally 保证门控释放；finished 信号广播朗读结束。
 """
 
 import asyncio
+import difflib
+import re
 import time
 
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -26,6 +28,27 @@ TTS_ECHO_TAIL = 0.3
 # 句间监听窗口（秒）：guard 为上一句余响静默期（耳仍 drop），window 为拾音期
 SENTENCE_GUARD = 0.35  # 余响静默：上一句结尾强音反射未散，此时拾音必误触发
 SENTENCE_WINDOW = 0.6  # 监听窗口：用户在此间说话 → 打断（句粒度进度保留）
+# 回声相似度阈值：转写与刚朗读文本的归一化 SequenceMatcher ratio 超过即视为回声
+ECHO_SIMILARITY_THRESHOLD = 0.5
+
+
+def _norm_text(s: str) -> str:
+    r"""归一化：去空白/标点（\W 保留 CJK 与字母数字），小写。"""
+    return re.sub(r"[\s\W_]+", "", s).casefold()
+
+
+def echo_like(text: str, played_text: str, threshold=ECHO_SIMILARITY_THRESHOLD) -> bool:
+    """转写结果与刚朗读文本是否高度相似（纯逻辑便于单测）。
+
+    播放结束后的余响被转写出来 ≈ 桃桃刚说的话（实测"（桃桃没有回应…）"→
+    转写"桃桃沒有回應"，归一化后 ratio≈0.8）；真人说话与此相似度通常 <0.3。
+    """
+    if not played_text:
+        return False
+    a, b = _norm_text(text), _norm_text(played_text)
+    if not a or not b:
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
 
 
 class Mouth(QObject):
@@ -39,24 +62,36 @@ class Mouth(QObject):
         self.tts = tts or create_tts(config or {})
         self.speaking = False  # 门控：朗读会话中（含尾巴）；耳据此 drop/监听
         self.window_open = False  # 句间监听窗口开：耳只在窗口期拾音
+        self._speak_lock = asyncio.Lock()  # 串行化：连续回复按序朗读，杜绝双流叠播
         if hasattr(self.tts, "sentence_done_callback"):  # 后端支持句间钩子
             self.tts.sentence_done_callback = self._sentence_gap
 
     async def speak(self, text):
         """命令：朗读文本。
 
+        串行化：并发回复（连续双击/快速消息）按序朗读，新回复等上一段读完
+        （含余响尾巴）再读，杜绝两个 speak 线程同时 sd.play 叠播。
         门控置位覆盖合成+播放全段；结束后延迟余响尾巴再释放（try/finally 保证
         被打字打断/后端异常路径也释放，防止门控卡死导致一直忽略用户语音）。
         """
         if not text:
             return
-        self.speaking = True
-        try:
-            await self.tts.speak(text)
-        finally:
-            await asyncio.sleep(TTS_ECHO_TAIL)
-            self.speaking = False
-            self.finished.emit()
+        async with self._speak_lock:
+            self.speaking = True
+            try:
+                await self.tts.speak(text)
+            finally:
+                await asyncio.sleep(TTS_ECHO_TAIL)
+                self.speaking = False
+                self.finished.emit()
+
+    def is_echo(self, text: str) -> bool:
+        """转写结果是否像刚朗读的内容（回声兜底，主控中心丢弃幽灵消息用）。
+
+        播放结束后余响（实测 ~1.3s）被麦克风拾回转写，内容即桃桃刚说的话——
+        与 played_text 高度相似 → 丢弃，防幽灵消息进回复/记忆。
+        """
+        return echo_like(text, self.tts.played_text)
 
     def _sentence_gap(self):
         """句间监听窗口：guard 余响静默 → 打开窗口 → 关闭。
