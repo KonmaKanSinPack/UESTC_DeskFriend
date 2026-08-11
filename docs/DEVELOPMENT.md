@@ -49,6 +49,7 @@
 9. **遗忘策略 = 轮次截断 + LLM 增量摘要**：超出轮次上限的老历史不硬丢，由 LLM 滚动生成摘要注入上下文（上下文 = system + facts + 摘要 + 最近 N 轮）。
 10. **长期记忆用事实表 + LLM 抽取**：`facts` 表存结构化事实（如"用户在 UESTC 读书"），抽取/去重/更新/删除全部交给 LLM 输出 JSON 操作完成，不写自研相似度去重；facts 量小，全量注入 system prompt，不做检索。
 11. **语义检索走降级路线**：优先 SQLite FTS5 关键词检索（内置、零依赖）；embedding top-k 仅列为远期候选（端点支持则用 API，否则本地小模型），不在初期目标内。
+12. **器官化架构哲学（各司其职，2026-08-11 确立）**：大模型（大脑）只输出意图、绝不碰物理硬件；器官（listen/mouth/vision）是纯物理层，不调用 LLM、不依赖 brain；主控中心（ui）监听器官信号、编排一切。硬规则与判定清单见独立指导文件 **`docs/ARCHITECTURE.md`**（开发前必读，CLAUDE.md 已挂引用）。
 
 ## 4. 分阶段任务
 
@@ -189,8 +190,12 @@ numpy 1.26 + whisper 20231117 + transformers 4.51.3 + x-transformers 2.11.24）�
 ### 8.2 架构与打断机制
 
 ```
-tts.py: TTS 抽象（speak / interrupt / busy / played_text）+ 工厂（TTS_BACKEND 选择）
-ui:     show_bubble 后触发 speak；新消息（语音/文字）到达 → interrupt() → 记录打断位置
+mouth.py: Mouth 器官（嘴，纯发声，2026-08-11 重构）：speak（回声门控置位/余响尾巴
+           内部消化）/ interrupt / busy / speaking 门控 / finished 信号
+tts.py:   TTS 抽象 + 后端实现（SiliconFlow / CosyVoice2 / Dummy）+ 工厂（TTS_BACKEND 选择）
+ui(主控中心): show_bubble 后 mouth.speak；新消息 → mouth.interrupt() → 前缀 →
+             brain.set_interruption（编排留在主控，嘴不依赖脑）
+listen.py: 回声门控读 mouth.speaking（耳单向只读嘴的门控状态）
 brain:  set_interruption(prefix) 门面转发
 astrbot 后端: get_llm_response 注入「[对话被打断] 你刚才说到『{prefix}』处被打断了。
              用户现在说：{text}」→ 用后清除
