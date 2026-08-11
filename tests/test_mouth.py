@@ -148,6 +148,31 @@ class TestReferenceBuffer:
         ref = mouth.drain_reference(now, delay=0.15)
         assert ref is not None and ref[0] == 1.0
 
+    def test_drain_keeps_block_for_echo_tail(self, mouth):
+        """窗口式：播放停止后参考仍保留，余响期可重复取用（AEC 消余响必需）。"""
+        import time
+
+        import numpy as np
+
+        now = time.monotonic()
+        mouth._ref_buf.append((now - 0.2, np.ones(512, dtype=np.float32)))
+        assert mouth.drain_reference(now) is not None  # 第一次取到
+        assert len(mouth._ref_buf) == 1  # 未消费
+        assert mouth.drain_reference(now + 0.3) is not None  # 余响期仍可取到
+
+    def test_drain_drops_stale_blocks(self, mouth):
+        """超出余响窗口的旧块被弹出（防无界增长）。"""
+        import time
+
+        import numpy as np
+
+        now = time.monotonic()
+        mouth._ref_buf.append((now - 2.0, np.ones(512, dtype=np.float32)))  # 超龄
+        mouth._ref_buf.append((now - 0.2, np.full(512, 2.0, dtype=np.float32)))
+        ref = mouth.drain_reference(now, keep_echo=1.0)
+        assert ref is not None and ref[0] == 2.0  # 旧块被弹，只留新块
+        assert len(mouth._ref_buf) == 1
+
     def test_drain_none_when_empty(self, mouth):
         assert mouth.drain_reference() is None
 

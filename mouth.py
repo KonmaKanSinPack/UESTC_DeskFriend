@@ -26,6 +26,7 @@ from tts import create_tts
 TTS_ECHO_TAIL = 0.3
 # AEC 参考缓冲：播放 PCM 供耳做回声消除（far-end 参考），块长对齐麦克风 32ms/16k
 AEC_REF_KEEP = 2.0  # 参考保留时长（秒），防无界增长
+AEC_REF_KEEP_ECHO = 1.0  # 余响窗口（秒）：播放停止后参考仍保留供 AEC 消余响
 AEC_REF_CHUNK = 512  # 块长（16kHz × 32ms，与麦克风块对齐）
 AEC_REF_DELAY = 0.15  # 播放→麦克风拾回路径延迟（秒），drain 时按此对齐
 
@@ -90,17 +91,24 @@ class Mouth(QObject):
         while self._ref_buf and self._ref_buf[0][0] < cutoff:
             self._ref_buf.popleft()
 
-    def drain_reference(self, now=None, delay=AEC_REF_DELAY):
+    def drain_reference(self, now=None, delay=AEC_REF_DELAY, keep_echo=AEC_REF_KEEP_ECHO):
         """取播放时刻 ≤ now-delay 的块作当前麦克风块的 far-end 参考；无则 None。
 
-        耳每 32ms 调一次；嘴未发声时缓冲为空 → None（AEC 不消，无回声可消）。
+        窗口式（不消费）：块保留 keep_echo 秒供余响期重复取用——声学余响在
+        播放停止后仍持续 ~0.5-2s，若参考随播放结束即耗尽（消费式曾如此），
+        AEC 无参考可消 → 余响直达 VAD → 误判插嘴（真机踩过：句尾"！"强音
+        余响触发 VAD 0.71 自打断）。
         """
         if now is None:
             now = time.monotonic()
+        # 弹出超出余响窗口的旧块（防无界增长）
+        while self._ref_buf and self._ref_buf[0][0] < now - delay - keep_echo:
+            self._ref_buf.popleft()
         ref = None
-        while self._ref_buf and self._ref_buf[0][0] <= now - delay:
-            ref = self._ref_buf.popleft()
-        return ref[1] if ref is not None else None
+        for t, block in self._ref_buf:  # 取窗口内最新块（播放推进时=新块；余响期=旧块）
+            if t <= now - delay:
+                ref = block
+        return ref
 
     async def interrupt(self) -> str:
         """命令：打断当前朗读，返回已播放文本前缀（打断位置）。
