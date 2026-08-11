@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 COSYVOICE2_HF_REPO = "FunAudioLLM/CosyVoice2-0.5B"
 DEFAULT_MODEL_DIR = "assets/models/CosyVoice2-0.5B"
 COSYVOICE2_SAMPLE_RATE = 22050  # CosyVoice2 输出采样率
+# 每句尾音填充（秒）：sd.play 流停止时设备缓冲尾音可能被丢（突兀截断），
+# 填充静音让截断落在静音里。同时是句间自然停顿的底噪
+SILICONFLOW_TAIL_PAD = 0.2
 # 就绪判定：这些关键文件齐全才算模型完整（下载中断时目录非空但可能缺文件）
 COSYVOICE2_REQUIRED_FILES = ("flow.pt", "hift.pt", "CosyVoice-BlankEN/model.safetensors")
 
@@ -297,10 +300,20 @@ class SiliconFlowTTS(TTS):
             self._busy = False
 
     def _speak_sync(self, text: str) -> None:
-        """线程内：逐句请求合成 + 播放（interrupt 可随时打断）。"""
+        """线程内：并行请求逐句合成，按序连续播放（interrupt 可随时打断）。
+
+        句间零网络静默（曾每句串行 HTTP，句间 1.5s 死寂 = 用户感知的"突兀截断"）：
+        所有句子并发请求，播放时只等当前句（fut.result()），后续句的请求在
+        上一句播放期间已完成。打断语义不变：循环顶部查 stop_event，break 后
+        线程池 shutdown(wait=False) 不等在途请求，不阻塞打断返回。
+        """
+        import threading as _th
+        import time
+        from concurrent.futures import ThreadPoolExecutor
         from io import BytesIO
 
         import httpx
+        import numpy as np
         import sounddevice as sd
         import soundfile as sf
 
@@ -311,9 +324,11 @@ class SiliconFlowTTS(TTS):
         self._speaking_text = text
         self._stop_event = threading.Event()
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        for sentence in _split_sentences(text):
-            if self._stop_event.is_set():
-                break
+        sentences = _split_sentences(text)
+        print(f"[TTS] 开始朗读（{len(sentences)} 句，线程 {_th.current_thread().name}）")
+
+        def fetch(sentence):
+            """单句合成请求（线程池内并发执行）。"""
             payload = {
                 "model": self.model,
                 "input": sentence,
@@ -324,9 +339,46 @@ class SiliconFlowTTS(TTS):
             resp = httpx.post(f"{self.base_url}/audio/speech", headers=headers, json=payload, timeout=60)
             resp.raise_for_status()
             audio, sr = sf.read(BytesIO(resp.content))
-            sd.play(audio, sr)
-            sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
-            self._played += sentence  # 该句播放完成（或被中断）
+            return audio, sr, sentence
+
+        pad = int(SILICONFLOW_TAIL_PAD * self.sample_rate)
+        pool = ThreadPoolExecutor(max_workers=min(len(sentences), 4))
+        try:
+            futures = [pool.submit(fetch, s) for s in sentences]
+            for i, fut in enumerate(futures, 1):
+                if self._stop_event.is_set():
+                    break
+                t0 = time.monotonic()
+                try:
+                    audio, sr, sentence = fut.result()  # 只等当前句；其余句并行请求中
+                except Exception as e:
+                    print(f"[TTS] 句{i} 合成失败：{e}")  # 单句失败不拖垮整段
+                    continue
+                t1 = time.monotonic()
+                # 尾音填充：流停止时设备缓冲尾音可能被丢，静音垫底防"突兀截断"
+                audio = np.concatenate([audio, np.zeros(pad, dtype=audio.dtype)])
+                wav_len = len(audio) / sr
+                # 尾部 RMS 诊断：wav 结尾是否自然衰减（尾 RMS 高 = 合成/服务端截断；
+                # 尾 RMS 低 = wav 干净，截断发生在播放层流停止）
+                seg = int(0.05 * sr)
+                tail_rms = float(np.sqrt(np.mean(np.asarray(audio[-seg:]) ** 2))) if len(audio) else 0.0
+                head_rms = float(np.sqrt(np.mean(np.asarray(audio[:seg]) ** 2))) if len(audio) else 0.0
+                sd.play(audio, sr)
+                t2 = time.monotonic()
+                sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
+                t3 = time.monotonic()
+                flag = ""
+                if t3 - t2 < wav_len - 0.2:
+                    flag = " <- 播放被提前终止"
+                elif t3 - t2 > wav_len + 0.3:
+                    flag = " <- 播放超时(underrun?)"
+                print(
+                    f"[TTS] 句{i}/{len(sentences)} 等待{t1 - t0:.2f}s wav{wav_len:.2f}s "
+                    f"播放{t3 - t2:.2f}s 头RMS{head_rms:.3f} 尾RMS{tail_rms:.3f}{flag}"
+                )
+                self._played += sentence  # 该句播放完成（或被中断）
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)  # 不阻塞打断返回
         if not self._stop_event.is_set():
             self._played = text  # 全部播完 = 完整文本
 
@@ -341,7 +393,10 @@ class SiliconFlowTTS(TTS):
                 pass
         prefix, self._played = self._played, ""
         if prefix == self._speaking_text:  # 完整播完（含竞态窗口），非打断 → 不误报
+            print(f"[TTS] interrupt 未生效（已完成播放，{len(prefix)} 字符）")
             return ""
+        if prefix:
+            print(f"[TTS] 朗读被打断（已播 {len(prefix)} 字符）")
         return prefix
 
     @property

@@ -11,12 +11,11 @@ from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
 from backends.judger import JUDGE_SYSTEM_PROMPT
 from brain import Brain, pack_msg, parse_tool_args
 from listen import Listen
-from tts import create_tts
+from mouth import Mouth
 from vision import Vision
 
 PROJECT_DIR = Path(__file__).parent
 SPRITE_WIDTH = 150  # 贴图统一缩放到这个宽度
-TTS_ECHO_TAIL = 0.3  # 朗读播完后的扬声器余响尾巴（秒），期间麦克风拾音仍视为回声
 
 
 def load_config():
@@ -92,7 +91,8 @@ class DeskFriend(QWidget):
         self.brain.reply_sink = self.show_bubble
         self.vision = Vision()
         self.listen = Listen()
-        self.tts = create_tts(load_config())  # 语音输出（朗读 + 打断）
+        self.mouth = Mouth(load_config())  # 发声器官（嘴）：朗读 + 打断 + 回声门控
+        self.listen.mouth = self.mouth  # 耳朵引用嘴：朗读期间忽略扬声器回声
 
         # 连接听觉信号到处理函数
         self.listen.text_signal.connect(self.on_heard_text)  # 发射器.信号.connect(接收器)
@@ -144,10 +144,8 @@ class DeskFriend(QWidget):
         print(response.content)
         self._anim_state = "talking"
         self.show_bubble(response.content)
-        # 朗读回复：speak 前置位回声门控（覆盖合成+播放全段），结束后延迟释放
-        # （异步不阻塞对话队列；TTS 后端由 config 选择）
-        self.listen.speaking = True
-        asyncio.get_event_loop().create_task(self._speak_then_release(response.content))
+        # 朗读回复（异步不阻塞对话队列；门控置位/尾巴释放由 Mouth 内部消化）
+        asyncio.get_event_loop().create_task(self.mouth.speak(response.content))
         # 回复已展示，再后台做记忆压缩（超限时把最老轮次并入摘要，失败不影响对话）
         await self.brain.maybe_compress()
         # 批量抽取自上次以来的事实（含此前攒下的背景谈话，失败不影响对话）
@@ -182,24 +180,14 @@ class DeskFriend(QWidget):
             offset = QPoint(0, round(2 * math.sin(self._anim_phase)))  # 缓慢呼吸
         self.move(self._base_pos + offset)
 
-    async def _speak_then_release(self, text):
-        """朗读回复，结束后延迟释放回声门控（扬声器余响尾巴）。
-
-        try/finally 保证无论朗读是否被打断都释放门控，防止"一直忽略用户语音"。
-        """
-        try:
-            await self.tts.speak(text)
-        finally:
-            await asyncio.sleep(TTS_ECHO_TAIL)
-            self.listen.speaking = False
-
     def _interrupt_tts(self):
         """用户新消息到达：打断朗读并记录打断位置（异步不阻塞入队）。"""
-        if self.tts.busy:
+        if self.mouth.busy:
             asyncio.get_event_loop().create_task(self._interrupt_tts_async())
 
     async def _interrupt_tts_async(self):
-        prefix = await self.tts.interrupt()
+        # 主控中心编排：嘴只返回打断位置，注入对话上下文由这里决定
+        prefix = await self.mouth.interrupt()
         if prefix:
             self.brain.set_interruption(prefix)
             print(f"朗读被打断，记录位置：…{prefix[-15:]}")

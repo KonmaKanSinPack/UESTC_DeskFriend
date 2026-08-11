@@ -66,8 +66,9 @@ class Listen(QObject):
     def __init__(self, history_length=5):
         super().__init__()
         self.listen_history = deque(maxlen=history_length)
-        # 回声门控：TTS 朗读中置位（ui 驱动），期间麦克风拾到的语音视为回声丢弃
-        self.speaking = False
+        # 回声门控：嘴器官引用（ui 装配）。朗读期间麦克风拾到的语音视为回声丢弃，
+        # 门控状态由 Mouth 内部管理（speaking 含余响尾巴），耳只读不写
+        self.mouth = None
 
         # 音频配置参数 (VAD 要求的标准格式)
         self.SAMPLE_RATE = 16000  # 采样率：16kHz
@@ -101,6 +102,11 @@ class Listen(QObject):
 
         self.start_threading()
 
+    @property
+    def _speaking(self):
+        """嘴是否在发声（含余响尾巴）；未装配（None）视为不发声。"""
+        return self.mouth.speaking if self.mouth is not None else False
+
     def start_threading(self):
         # daemon=True意思是：这个线程是个守护线程，主线程结束了它也会跟着结束，不会阻碍程序退出。
         listen_thread = threading.Thread(target=self.during_listening, daemon=True)
@@ -126,7 +132,7 @@ class Listen(QObject):
                 # 回声门控：桃桃朗读时麦克风拾到的是扬声器回声。若当真会触发
                 # on_heard_text → interrupt 打断自己（自反馈回环）。忽略即可：
                 # 不 reset VAD、不录音，继续读流保持同步（VAD 状态随回声自然回落）
-                if is_echo_trigger(score, self.speaking):
+                if is_echo_trigger(score, self._speaking):
                     if not echo_ignored:
                         print("检测到 TTS 播放回声，忽略")
                         echo_ignored = True
@@ -143,7 +149,7 @@ class Listen(QObject):
                     # 模型打分
                     score = self.vad(audio_f32)
 
-                    speaking_flags.append(self.speaking)
+                    speaking_flags.append(self._speaking)
 
                     if score < 0.5:
                         silence_timeout += 1
