@@ -113,7 +113,8 @@ class TestSentenceWindow:
         t0 = time.monotonic()
         mouth._sentence_gap()
         elapsed = time.monotonic() - t0
-        assert elapsed >= SENTENCE_GUARD + SENTENCE_WINDOW
+        # Windows time.sleep 粒度可能略短（实测差 ~13ms），留 50ms 容差
+        assert elapsed >= SENTENCE_GUARD + SENTENCE_WINDOW - 0.05
         assert mouth.window_open is False  # 结束后关闭
 
     def test_window_is_open_during_listen_phase(self, mouth):
