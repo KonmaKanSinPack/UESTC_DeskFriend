@@ -30,8 +30,13 @@ COSYVOICE2_REQUIRED_FILES = ("flow.pt", "hift.pt", "CosyVoice-BlankEN/model.safe
 
 
 def _split_sentences(text):
-    """按中文句末标点切句（保留标点）。逐句合成播放 = 句粒度打断进度。"""
-    return [s for s in re.split(r"(?<=[。！？!?；;])", text) if s.strip()]
+    """按中文句末标点切句（保留标点）。逐句合成播放 = 句粒度打断进度。
+
+    过滤纯标点句（如「在呢在呢！！」切出第二句「！」）——发给 TTS API 会
+    返回错误（真机踩过：Format not recognised），且这类句无语音内容。
+    """
+    sentences = [s for s in re.split(r"(?<=[。！？!?；;])", text) if s.strip()]
+    return [s for s in sentences if re.search(r"[一-鿿A-Za-z0-9]", s)]
 
 
 def _load_wav_soundfile(wav, target_sr, min_sr=16000):
@@ -345,7 +350,11 @@ class SiliconFlowTTS(TTS):
             }
             resp = httpx.post(f"{self.base_url}/audio/speech", headers=headers, json=payload, timeout=60)
             resp.raise_for_status()
-            audio, sr = sf.read(BytesIO(resp.content))
+            try:
+                audio, sr = sf.read(BytesIO(resp.content))
+            except Exception as e:
+                # API 返回非 wav（如错误 JSON）时带上响应片段，便于定位
+                raise RuntimeError(f"wav 解析失败：{e}（响应片段：{resp.content[:200]!r}）") from e
             return audio, sr, sentence
 
         pad = int(SILICONFLOW_TAIL_PAD * self.sample_rate)
@@ -359,7 +368,7 @@ class SiliconFlowTTS(TTS):
                 try:
                     audio, sr, sentence = fut.result()  # 只等当前句；其余句并行请求中
                 except Exception as e:
-                    print(f"[TTS] 句{i} 合成失败：{e}")  # 单句失败不拖垮整段
+                    print(f"[TTS] 句{i} 合成失败：{sentences[i - 1]!r} → {e}")  # 单句失败不拖垮整段
                     continue
                 t1 = time.monotonic()
                 # 尾音填充：流停止时设备缓冲尾音可能被丢，静音垫底防"突兀截断"

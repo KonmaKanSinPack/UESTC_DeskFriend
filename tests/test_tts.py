@@ -138,6 +138,24 @@ class TestSiliconFlowTTS:
         asyncio.run(tts.speak("你好"))
         assert tts.busy is False
 
+    def test_non_wav_response_no_crash(self, tmp_path, monkeypatch):
+        """API 返回非 wav（错误 JSON）→ 该句失败不拖垮整段，busy 复位。"""
+        ref = tmp_path / "ref.wav"
+        __import__("soundfile").write(str(ref), [0.0] * 100, 16000)
+        tts = SiliconFlowTTS(api_key="k", voice_ref=str(ref), voice_ref_text="参考文本")
+
+        class FakeResp:
+            content = b'{"error": "bad request"}'
+
+            def raise_for_status(self):
+                pass
+
+        monkeypatch.setattr("httpx.post", lambda *a, **k: FakeResp())
+        monkeypatch.setattr("sounddevice.play", lambda a, sr: None)
+        monkeypatch.setattr("sounddevice.wait", lambda: None)
+        asyncio.run(tts.speak("你好呀。我是桃桃。"))
+        assert tts.busy is False  # 两句都失败也不崩
+
     def test_interrupt_when_idle_returns_empty(self):
         tts = SiliconFlowTTS(api_key="k")
         assert asyncio.run(tts.interrupt()) == ""
@@ -170,6 +188,12 @@ class TestSplitSentences:
         assert _split_sentences("你好呀。今天怎么样？") == ["你好呀。", "今天怎么样？"]
         assert _split_sentences("没有标点的一句话") == ["没有标点的一句话"]
         assert _split_sentences("") == []
+
+    def test_drops_punctuation_only_sentences(self):
+        """「在呢在呢！！」切出的第二句「！」是纯标点，发给 TTS API 会报错 → 过滤。"""
+        assert _split_sentences("在呢在呢！！") == ["在呢在呢！"]
+        assert _split_sentences("！！") == []
+        assert _split_sentences("嗯。？") == ["嗯。"]
 
 
 class TestEnsureModel:
