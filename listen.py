@@ -1,4 +1,5 @@
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -14,6 +15,9 @@ from PyQt5.QtCore import QObject, pyqtSignal
 # 真说话（两音节以上）在任意 320ms 窗口内活跃块必 ≥8。
 WINDOW_ACTIVITY_HISTORY = 10  # 活动度窗口（块数，32ms/块）
 WINDOW_INTERRUPT_ACTIVE = 8  # 打断阈值：窗口内活跃块数
+# 打断冷却（秒）：打断后短期内抑制再次打断（防 cancel-restart 循环，照
+# FutureAGI barge-in 指南：打断后再打断的最小间隔 ~350ms）
+INTERRUPT_COOLDOWN = 0.35
 
 
 def should_drop_echo(speaking: bool, window_open: bool) -> bool:
@@ -93,6 +97,8 @@ class Listen(QObject):
         # 窗口期打断活动度：最近 N 块 VAD 结果（True=活跃）；确认后才打断
         self._window_activity = deque(maxlen=WINDOW_ACTIVITY_HISTORY)
         self._interrupt_sent = False  # 本窗口是否已发打断（防重复触发）
+        self._prev_window_open = False  # 窗口开合沿检测（开窗时重置 VAD 状态）
+        self._interrupt_cooldown_until = 0.0  # 打断冷却截止（monotonic）
 
         # 音频配置参数 (VAD 要求的标准格式)
         self.SAMPLE_RATE = 16000  # 采样率：16kHz
@@ -140,6 +146,36 @@ class Listen(QObject):
         """窗口期打断日志（活动度摘要）。"""
         return f"监听窗口内检测到用户说话，打断朗读（{sum(self._window_activity)}/{WINDOW_ACTIVITY_HISTORY} 块活跃）"
 
+    def _window_tick(self, score: float) -> None:
+        """句间监听窗口每块处理：开窗重置 VAD → 活动度累积 → 冷却 → 打断。
+
+        - 开窗沿：vad.reset() 丢弃播放期被回声污染的状态（voice-echo 建议，
+          否则窗口期打分从脏状态开始，余响更易误判）
+        - 活动度：最近 10 块 ≥8 活跃才打断；打断后 INTERRUPT_COOLDOWN 内
+          不再打断（防 cancel-restart 循环，FutureAGI 指南）
+        """
+        window_open = self._window_open
+        if window_open != self._prev_window_open:
+            if window_open:
+                self.vad.reset()  # 开窗：干净状态打分
+            self._prev_window_open = window_open
+        if self._speaking and window_open:
+            self._window_activity.append(score >= 0.5)
+            now = time.monotonic()
+            if (
+                window_interrupt_confirmed(self._window_activity)
+                and not self._interrupt_sent
+                and now >= self._interrupt_cooldown_until
+            ):
+                self._interrupt_sent = True
+                self._interrupt_cooldown_until = now + INTERRUPT_COOLDOWN
+                self.interrupt_requested.emit()
+                print(self._window_interrupt_msg())
+        else:
+            if self._window_activity or self._interrupt_sent:
+                self._window_activity.clear()
+                self._interrupt_sent = False
+
     def start_threading(self):
         # daemon=True意思是：这个线程是个守护线程，主线程结束了它也会跟着结束，不会阻碍程序退出。
         listen_thread = threading.Thread(target=self.during_listening, daemon=True)
@@ -161,18 +197,8 @@ class Listen(QObject):
             audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
             # 模型打分
             score = self.vad(audio_f32)
-            # 句间监听窗口：活动度累积（每块都记，非窗口期复位）
-            if self._speaking and self._window_open:
-                self._window_activity.append(score >= 0.5)
-                if window_interrupt_confirmed(self._window_activity) and not self._interrupt_sent:
-                    # 最近 320ms 持续活跃 = 真用户说话（余响是单发尖峰，够不着阈值）
-                    self._interrupt_sent = True
-                    self.interrupt_requested.emit()
-                    print(self._window_interrupt_msg())
-            else:
-                if self._window_activity or self._interrupt_sent:
-                    self._window_activity.clear()
-                    self._interrupt_sent = False
+            # 句间监听窗口：开窗重置 VAD / 活动度累积 / 冷却 / 打断
+            self._window_tick(score)
             if score >= 0.5:
                 # 句间监听窗口方案：句子播放中/余响静默期（speaking 且窗口未开）→
                 # 拾到的必是扬声器回声，忽略（不 reset VAD、不录音，继续读流保持同步）；
@@ -195,12 +221,7 @@ class Listen(QObject):
                     score = self.vad(audio_f32)
 
                     # 窗口期活动度继续累积（打断确认可能发生在录音中）
-                    if self._speaking and self._window_open:
-                        self._window_activity.append(score >= 0.5)
-                        if window_interrupt_confirmed(self._window_activity) and not self._interrupt_sent:
-                            self._interrupt_sent = True
-                            self.interrupt_requested.emit()
-                            print(self._window_interrupt_msg())
+                    self._window_tick(score)
 
                     playing_flags.append(self.mouth.busy if self.mouth is not None else False)
 
