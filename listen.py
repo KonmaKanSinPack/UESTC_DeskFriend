@@ -142,10 +142,16 @@ class Listen(QObject):
         return self.mouth.speaking if self.mouth is not None else False
 
     def _aec_process(self, chunk_f32):
-        """AEC 处理：far-end 参考取嘴最近播放的块（无播放则无回声，原样返回）。"""
+        """AEC 处理：far-end 参考取嘴最近播放的块；无播放 → 零参考（无回声可消）。
+
+        注意：WebRTC AEC 开启时 far 必填（None 会抛 ValueError，曾打穿监听线程）；
+        零参考等价"当前无回声"，处理结果仍走 NS 降噪，不影响 VAD。
+        """
         if self.aec is None:
             return chunk_f32
         ref = self.mouth.drain_reference() if self.mouth is not None else None
+        if ref is None:
+            ref = np.zeros(len(chunk_f32), dtype=np.float32)
         return self.aec.process(chunk_f32, ref)
 
     def _aec_converged(self):
@@ -171,12 +177,20 @@ class Listen(QObject):
         MAX_SILENCE = 45  # 连续静音约 1.5 秒视为说完
         MAX_CHUNKS = 470  # 最长录音约 15 秒，防止缓冲无限增长
         echo_ignored = False  # 正在忽略回声（防每 32ms 重复打印）
+        aec_failed = False  # AEC 运行时异常：回退原始信号，保监听线程不死
         while True:
             voice_buffer = []
             raw_bytes, _overflowed = self.stream.read(self.CHUNK)
             audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-            # AEC：先消回声再打分（far-end 参考来自嘴的播放缓冲；无播放则原样）
-            chunk_clean = self._aec_process(audio_f32)
+            # AEC：先消回声再打分（far-end 参考来自嘴的播放缓冲；无播放则零参考）
+            try:
+                chunk_clean = self._aec_process(audio_f32)
+            except Exception as e:
+                # 监听线程绝不能死（死了=耳朵聋）；异常降级为原始信号，仅报一次
+                if not aec_failed:
+                    print(f"AEC 处理失败，回退原始信号：{e}")
+                    aec_failed = True
+                chunk_clean = audio_f32
             # 模型打分
             score = self.vad(chunk_clean)
             if score >= 0.5:
