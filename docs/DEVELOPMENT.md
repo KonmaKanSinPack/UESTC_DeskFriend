@@ -114,9 +114,9 @@
 - Rust 重写
 - 多平台（Windows/macOS）适配
 - 向量数据库 / embedding 检索（仅 Phase 7 远期候选）
-- TTS 语音合成（可列为远期候选）
 
 > 注：原"引入外部 Agent 框架（如 AstrBot）"一项已随技术决策 8 的更新而取消——AstrBot 现在是默认回复后端。
+> 原"TTS 语音合成（可列为远期候选）"已实现（2026-08-11，见 §8）。
 
 ## 7. AstrBot 接入（C方案，2026-08-10）
 
@@ -168,3 +168,44 @@ AstrBot 侧配置：反向 WebSocket 主机 `0.0.0.0`、端口自定、token 自
 
 「回复中提示」：实测桃桃单条回复即结束（未见占位提示），`ASTRBOT_SETTLE = 2.0` 默认值即可；
 若日后开启提示且间隔超过 settle，需相应调大（见 onebot_bridge 静默窗口语义）。
+
+## 8. 语音输出（TTS，2026-08-11）
+
+### 8.1 决策：SiliconFlow API 为主方案，本地 CosyVoice2 标记未完成
+
+**主方案**：SiliconFlow API（`/v1/audio/speech`，模型 `FunAudioLLM/CosyVoice2-0.5B`）。
+每次请求带 `references`（参考音频 base64 + 文本）实现零样本克隆，免上传流程；
+`response_format=wav` 直接播放，稳定 1~2s/句。音色已验证满意（胡桃参考音频）。
+
+**决策背景（教训）**：本地 CosyVoice2 对依赖版本栈极度敏感——Python 3.12 + torch 2.11 +
+onnxruntime 1.24 + numpy 2.x 与官方矩阵（3.10 + torch 2.3.1 + onnxruntime 1.18 +
+numpy 1.26 + whisper 20231117 + transformers 4.51.3 + x-transformers 2.11.24）存在数值
+行为差异，导致合成内容完全乱码且速度不稳（6.7s~386s/句）。单点降级不可行：transformers
+5.x 要 torch 2.4+（register_fake）、x-transformers 2.25 要 torch 2.5+，互相锁定。
+官方环境（Python 3.10 + requirements 全量）验证正常，但需独立环境常驻。
+本地实现保留（`tts.CosyVoice2TTS`，docstring 标记 ⚠️ 未完成），待完善方向：
+官方环境常驻服务（`.venv-cosyvoice`）+ vllm 加速，届时可脱离 API 依赖。
+
+### 8.2 架构与打断机制
+
+```
+tts.py: TTS 抽象（speak / interrupt / busy / played_text）+ 工厂（TTS_BACKEND 选择）
+ui:     show_bubble 后触发 speak；新消息（语音/文字）到达 → interrupt() → 记录打断位置
+brain:  set_interruption(prefix) 门面转发
+astrbot 后端: get_llm_response 注入「[对话被打断] 你刚才说到『{prefix}』处被打断了。
+             用户现在说：{text}」→ 用后清除
+```
+
+- 逐句合成播放（`_split_sentences` 按句末标点切分）= 句粒度打断进度
+- 播放用 sounddevice（非阻塞 + `sd.stop()` 线程安全打断）；合成在 `to_thread` 线程池，
+  不卡 Qt 事件循环
+- 打断位置只注入对话主通道；should_reply 判定用纯文本不受影响；无未完成朗读时消息纯净
+
+### 8.3 配置
+
+```toml
+TTS_BACKEND = "siliconflow"   # siliconflow（默认）/ cosyvoice2（未完成）/ dummy / none
+TTS_API_KEY / TTS_BASE_URL / TTS_MODEL / TTS_SAMPLE_RATE
+TTS_VOICE_REF = "assets/参考音频.wav"      # 3-10 秒干净人声
+TTS_VOICE_REF_TEXT = "（音频逐字文本）"     # 必须与音频精确对应，错字克隆质量崩
+```
