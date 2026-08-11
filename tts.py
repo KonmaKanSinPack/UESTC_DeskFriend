@@ -214,6 +214,8 @@ class CosyVoice2TTS(TTS):
         self._played = ""
         self._speaking_text = text
         self._stop_event = threading.Event()
+        import time
+
         import sounddevice as sd
 
         for sentence in _split_sentences(text):
@@ -224,7 +226,7 @@ class CosyVoice2TTS(TTS):
                     break
                 audio = chunk["tts_speech"].cpu().numpy().flatten()
                 if self.ref_callback is not None:
-                    self.ref_callback(audio, COSYVOICE2_SAMPLE_RATE)  # AEC 参考信号
+                    self.ref_callback(audio, COSYVOICE2_SAMPLE_RATE, time.monotonic())  # AEC 参考
                 sd.play(audio, samplerate=COSYVOICE2_SAMPLE_RATE)
                 sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
             self._played += sentence  # 该句播放完成（或被中断时已尽力播放）
@@ -368,7 +370,8 @@ class SiliconFlowTTS(TTS):
                 tail_rms = float(np.sqrt(np.mean(np.asarray(audio[-seg:]) ** 2))) if len(audio) else 0.0
                 head_rms = float(np.sqrt(np.mean(np.asarray(audio[:seg]) ** 2))) if len(audio) else 0.0
                 if self.ref_callback is not None:
-                    self.ref_callback(audio, sr)  # AEC 参考信号（播前上报）
+                    # AEC 参考信号：带上实际播放时刻（drain 按它对齐，比 tee 时刻更准）
+                    self.ref_callback(audio, sr, time.monotonic())
                 sd.play(audio, sr)
                 t2 = time.monotonic()
                 sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回

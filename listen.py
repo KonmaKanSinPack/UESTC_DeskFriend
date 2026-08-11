@@ -13,20 +13,24 @@ from PyQt5.QtCore import QObject, pyqtSignal
 # AEC（WebRTC AEC3）：
 # 收敛期（秒）——期内仍用旧门控丢弃回声（AEC 自适应滤波尚未收敛，回声可能漏过）
 AEC_CONVERGENCE = 1.2
-# 播放→麦克风拾回路径延迟（ms）：本机实测流启动 ~70-170ms，取 150 给 AEC 延迟估计打底
-AEC_STREAM_DELAY_MS = 150
+# APM 内部时移关闭：时移全交给 Mouth.drain_reference 按播放时刻对齐。
+# 曾设 150ms 造成双重时移（drain 前移 0.15s + APM 再移 0.15s ≈ 300ms，
+# 超出 AEC3 延迟估计范围 → 无法收敛 → 残留回声触发 VAD → 自打断）
+AEC_STREAM_DELAY_MS = 0
 
 
-def echo_gate_action(speaking: bool, aec_ready: bool, converged: bool):
+def echo_gate_action(speaking: bool, playing: bool, aec_ready: bool, converged: bool):
     """AEC 门控决策：VAD 触发时返回 'drop' / 'barge_in' / None（纯逻辑便于单测）。
 
     - 嘴未发声 → None：正常录音
-    - 嘴发声且 AEC 不可用或未收敛 → 'drop'：视为回声丢弃（旧门控兜底）
-    - 嘴发声且 AEC 已收敛 → 'barge_in'：残差触发 = 真人插嘴，立即打断
+    - 嘴发声但 AEC 不可用/未收敛 → 'drop'：视为回声丢弃（旧门控兜底）
+    - 嘴发声且后端不在播放（speaking 尾巴窗口）→ 'drop'：余响仍在响，
+      此时触发 VAD 大概率是上一句的回声尾巴（实测余响可达 ~2s），不判插嘴
+    - 嘴正在播放且 AEC 已收敛 → 'barge_in'：残差触发 = 真人插嘴，立即打断
     """
     if not speaking:
         return None
-    if not (aec_ready and converged):
+    if not (aec_ready and converged) or not playing:
         return "drop"
     return "barge_in"
 
@@ -194,7 +198,9 @@ class Listen(QObject):
             # 模型打分
             score = self.vad(chunk_clean)
             if score >= 0.5:
-                action = echo_gate_action(self._speaking, self.aec is not None, self._aec_converged())
+                # playing = 后端正在播放（尾巴窗口 speaking=True 但 busy=False → 不判插嘴）
+                playing = self.mouth.busy if self.mouth is not None else False
+                action = echo_gate_action(self._speaking, playing, self.aec is not None, self._aec_converged())
                 if action == "drop":
                     # 收敛期（或无 AEC）：桃桃朗读时拾到的是扬声器回声。若当真会触发
                     # interrupt 打断自己（自反馈回环）。忽略：不 reset VAD、不录音，
@@ -208,7 +214,7 @@ class Listen(QObject):
                     # 本段录音信任 AEC 判定（播放随即停止，跳过污染检查）
                     self._barge_in = True
                     self.interrupt_requested.emit()
-                    print("检测到用户插嘴，立即打断朗读")
+                    print(f"检测到用户插嘴，立即打断朗读（VAD {score:.2f}）")
                 echo_ignored = False
                 print("检测到声音了，开始录音...")
                 self.vad.reset()  # 每段录音前重置 VAD 状态

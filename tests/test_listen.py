@@ -10,21 +10,25 @@ from listen import echo_gate_action, segment_contaminated
 
 class TestEchoGateAction:
     def test_not_speaking_normal(self):
-        """嘴未发声：正常录音（无论 AEC 状态）。"""
-        assert echo_gate_action(False, True, True) is None
-        assert echo_gate_action(False, False, False) is None
+        """嘴未发声：正常录音（无论 AEC/播放状态）。"""
+        assert echo_gate_action(False, False, True, True) is None
+        assert echo_gate_action(False, True, False, False) is None
 
     def test_speaking_without_aec_drops(self):
         """AEC 不可用 → 回退纯门控：发声期间一律丢弃。"""
-        assert echo_gate_action(True, False, False) == "drop"
+        assert echo_gate_action(True, True, False, False) == "drop"
 
     def test_speaking_during_convergence_drops(self):
         """AEC 收敛期内 → 仍丢弃（回声可能漏过，旧门控兜底）。"""
-        assert echo_gate_action(True, True, False) == "drop"
+        assert echo_gate_action(True, True, True, False) == "drop"
+
+    def test_speaking_tail_window_drops(self):
+        """尾巴窗口（speaking 但后端不在播放）→ 仍丢弃：余响未散，不判插嘴。"""
+        assert echo_gate_action(True, False, True, True) == "drop"
 
     def test_speaking_after_convergence_barges_in(self):
-        """AEC 已收敛 → 残差触发 = 真人插嘴。"""
-        assert echo_gate_action(True, True, True) == "barge_in"
+        """正在播放且 AEC 已收敛 → 残差触发 = 真人插嘴。"""
+        assert echo_gate_action(True, True, True, True) == "barge_in"
 
 
 class TestSegmentContaminated:

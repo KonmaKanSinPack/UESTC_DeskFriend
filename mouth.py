@@ -72,16 +72,21 @@ class Mouth(QObject):
             self._ref_buf.clear()  # 清参考：防止陈旧参考被当成回声去消
             self.finished.emit()
 
-    def _tee_reference(self, audio, sr):
-        """播放前上报：重采样到 16k，按 512 块切分（尾块补零）带播放时刻入参考缓冲。"""
+    def _tee_reference(self, audio, sr, t_play=None):
+        """播放上报：重采样到 16k，按 512 块切分（尾块补零）带播放时刻入参考缓冲。
+
+        t_play 由后端在 sd.play 前一刻记录（实际播放时刻，比 tee 时刻准——
+        每句新建流的启动延迟 70~170ms 逐句变化，用 tee 时刻对齐误差可达 ±100ms）。
+        """
         a16 = _resample_to_16k(audio, sr)
         now = time.monotonic()
+        base = t_play if t_play is not None else now
         for k in range(0, len(a16), AEC_REF_CHUNK):
             block = a16[k : k + AEC_REF_CHUNK]
             if len(block) < AEC_REF_CHUNK:
                 block = np.pad(block, (0, AEC_REF_CHUNK - len(block)))
-            self._ref_buf.append((now + k / 16000.0, block))
-        cutoff = time.monotonic() - AEC_REF_KEEP  # 裁剪超龄条目（防无界增长）
+            self._ref_buf.append((base + k / 16000.0, block))
+        cutoff = now - AEC_REF_KEEP  # 裁剪超龄条目（防无界增长）
         while self._ref_buf and self._ref_buf[0][0] < cutoff:
             self._ref_buf.popleft()
 

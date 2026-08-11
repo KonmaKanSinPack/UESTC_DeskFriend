@@ -126,6 +126,16 @@ class TestReferenceBuffer:
         assert len(mouth._ref_buf) == 1
         assert mouth._ref_buf[0][1][0] == 1.0
 
+    def test_tee_uses_play_time_stamp(self, mouth):
+        """t_play 由后端在 sd.play 前记录，块时间戳用它（对齐比 tee 时刻准）。"""
+        import time
+
+        import numpy as np
+
+        t0 = time.monotonic()
+        mouth._tee_reference(np.ones(512, dtype=np.float32), 16000, t_play=t0)
+        assert mouth._ref_buf[0][0] == t0
+
     def test_drain_returns_block_played_delay_ago(self, mouth):
         """只取播放时刻 ≤ now-delay 的块（延迟窗口对齐），未来块不取。"""
         import time
