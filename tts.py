@@ -172,7 +172,7 @@ class CosyVoice2TTS(TTS):
         self._played = ""
         self._speaking_text = ""  # 本次朗读全文（interrupt 防误报用）
         self._stop_event = None
-        self.ref_callback = None  # 播放音频上报钩子（Mouth 注入，AEC far-end 参考）
+        self.sentence_done_callback = None  # 句间监听窗口钩子（Mouth 注入，非末句播完调用）
 
     def _load(self):
         """惰性加载模型与参考音频（同步；调用方负责丢线程）。"""
@@ -214,22 +214,23 @@ class CosyVoice2TTS(TTS):
         self._played = ""
         self._speaking_text = text
         self._stop_event = threading.Event()
-        import time
 
         import sounddevice as sd
 
-        for sentence in _split_sentences(text):
+        sentences = _split_sentences(text)
+        for i, sentence in enumerate(sentences, 1):
             if self._stop_event.is_set():
                 break
             for chunk in self._model.inference_zero_shot(sentence, self.voice_ref_text, self.voice_ref):
                 if self._stop_event.is_set():
                     break
                 audio = chunk["tts_speech"].cpu().numpy().flatten()
-                if self.ref_callback is not None:
-                    self.ref_callback(audio, COSYVOICE2_SAMPLE_RATE, time.monotonic())  # AEC 参考
                 sd.play(audio, samplerate=COSYVOICE2_SAMPLE_RATE)
                 sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
             self._played += sentence  # 该句播放完成（或被中断时已尽力播放）
+            # 句间监听窗口：非末句播完调用（阻塞 = 播放暂停；窗口内被打断 → 循环顶部 break）
+            if self.sentence_done_callback is not None and i < len(sentences):
+                self.sentence_done_callback()
         if not self._stop_event.is_set():
             self._played = text  # 全部播完 = 完整文本
 
@@ -284,7 +285,7 @@ class SiliconFlowTTS(TTS):
         self._played = ""
         self._speaking_text = ""  # 本次朗读全文（interrupt 防误报用）
         self._stop_event = None
-        self.ref_callback = None  # 播放音频上报钩子（Mouth 注入，AEC far-end 参考）
+        self.sentence_done_callback = None  # 句间监听窗口钩子（Mouth 注入，非末句播完调用）
 
     def _ref_audio_b64(self):
         """参考音频 base64（data URI）；读一次缓存，避免每次请求读盘。"""
@@ -369,9 +370,6 @@ class SiliconFlowTTS(TTS):
                 seg = int(0.05 * sr)
                 tail_rms = float(np.sqrt(np.mean(np.asarray(audio[-seg:]) ** 2))) if len(audio) else 0.0
                 head_rms = float(np.sqrt(np.mean(np.asarray(audio[:seg]) ** 2))) if len(audio) else 0.0
-                if self.ref_callback is not None:
-                    # AEC 参考信号：带上实际播放时刻（drain 按它对齐，比 tee 时刻更准）
-                    self.ref_callback(audio, sr, time.monotonic())
                 sd.play(audio, sr)
                 t2 = time.monotonic()
                 sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
@@ -386,6 +384,9 @@ class SiliconFlowTTS(TTS):
                     f"播放{t3 - t2:.2f}s 头RMS{head_rms:.3f} 尾RMS{tail_rms:.3f}{flag}"
                 )
                 self._played += sentence  # 该句播放完成（或被中断）
+                # 句间监听窗口：非末句播完调用（阻塞 = 播放暂停；窗口内被打断 → 循环顶部 break）
+                if self.sentence_done_callback is not None and i < len(sentences):
+                    self.sentence_done_callback()
         finally:
             pool.shutdown(wait=False, cancel_futures=True)  # 不阻塞打断返回
         if not self._stop_event.is_set():

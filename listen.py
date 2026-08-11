@@ -1,5 +1,4 @@
 import threading
-import time
 from collections import deque
 from pathlib import Path
 
@@ -10,29 +9,16 @@ import sounddevice as sd
 from faster_whisper import WhisperModel
 from PyQt5.QtCore import QObject, pyqtSignal
 
-# AEC（WebRTC AEC3）：
-# 收敛期（秒）——期内仍用旧门控丢弃回声（AEC 自适应滤波尚未收敛，回声可能漏过）
-AEC_CONVERGENCE = 1.2
-# APM 内部时移关闭：时移全交给 Mouth.drain_reference 按播放时刻对齐。
-# 曾设 150ms 造成双重时移（drain 前移 0.15s + APM 再移 0.15s ≈ 300ms，
-# 超出 AEC3 延迟估计范围 → 无法收敛 → 残留回声触发 VAD → 自打断）
-AEC_STREAM_DELAY_MS = 0
 
+def should_drop_echo(speaking: bool, window_open: bool) -> bool:
+    """门控规则（句间监听窗口方案）：VAD 触发时是否视为回声丢弃（纯逻辑便于单测）。
 
-def echo_gate_action(speaking: bool, playing: bool, aec_ready: bool, converged: bool):
-    """AEC 门控决策：VAD 触发时返回 'drop' / 'barge_in' / None（纯逻辑便于单测）。
-
-    - 嘴未发声 → None：正常录音
-    - 嘴发声但 AEC 不可用/未收敛 → 'drop'：视为回声丢弃（旧门控兜底）
-    - 嘴发声且后端不在播放（speaking 尾巴窗口）→ 'drop'：余响仍在响，
-      此时触发 VAD 大概率是上一句的回声尾巴（实测余响可达 ~2s），不判插嘴
-    - 嘴正在播放且 AEC 已收敛 → 'barge_in'：残差触发 = 真人插嘴，立即打断
+    - 嘴未发声 → 不丢（正常监听）
+    - 嘴发声且监听窗口未开（句子播放中 / 句间余响静默期）→ 丢：此刻拾到的
+      必是扬声器回声（播放中或上一句余响），若当真会触发 interrupt 打断自己
+    - 嘴发声且监听窗口开着 → 不丢：窗口期 = 只此期间拾音，触发即用户说话
     """
-    if not speaking:
-        return None
-    if not (aec_ready and converged) or not playing:
-        return "drop"
-    return "barge_in"
+    return speaking and not window_open
 
 
 def segment_contaminated(speaking_flags) -> bool:
@@ -78,18 +64,15 @@ class SileroVadOnnx:
 
 class Listen(QObject):
     text_signal = pyqtSignal(str)  # 只是信号通道，不是消息缓存。
-    interrupt_requested = pyqtSignal()  # AEC 收敛后 VAD 触发且嘴在发声 = 用户插嘴 → 主控立即打断
+    interrupt_requested = pyqtSignal()  # 句间监听窗口内 VAD 触发 = 用户说话 → 主控立即打断
 
     def __init__(self, history_length=5):
         super().__init__()
         self.listen_history = deque(maxlen=history_length)
         # 回声门控：嘴器官引用（ui 装配）。朗读期间麦克风拾到的语音视为回声丢弃，
-        # 门控状态由 Mouth 内部管理（speaking 含余响尾巴），耳只读不写
+        # 门控状态由 Mouth 内部管理（speaking 会话 + window_open 句间监听窗口），
+        # 耳只读不写
         self.mouth = None
-        # AEC 回声消除：进口信号处理（先消回声再 VAD）；不可用 → None → 回退纯门控
-        self.aec = None
-        self._aec_convergence = AEC_CONVERGENCE
-        self._barge_in = False  # 当前录音段是插嘴录音（信任 AEC 判定，跳过污染检查）
 
         # 音频配置参数 (VAD 要求的标准格式)
         self.SAMPLE_RATE = 16000  # 采样率：16kHz
@@ -121,50 +104,17 @@ class Listen(QObject):
             print("本地未找到 Whisper 模型缓存，转为在线下载...")
             self.whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
 
-        self._init_aec()
         self.start_threading()
-
-    def _init_aec(self):
-        """初始化 WebRTC AEC3（pywebrtc-audio，惰性导入）；不可用则回退纯回声门控。"""
-        try:
-            from pywebrtc_audio import AudioProcessor
-
-            self.aec = AudioProcessor(
-                sample_rate=self.SAMPLE_RATE,
-                echo_cancellation=True,
-                noise_suppression=True,
-                stream_delay_ms=AEC_STREAM_DELAY_MS,
-            )
-            print("AEC 回声消除已启用（pywebrtc-audio AEC3）")
-        except Exception as e:
-            self.aec = None
-            print(f"AEC 不可用，回退纯回声门控：{e}")
 
     @property
     def _speaking(self):
         """嘴是否在发声（含余响尾巴）；未装配（None）视为不发声。"""
         return self.mouth.speaking if self.mouth is not None else False
 
-    def _aec_process(self, chunk_f32):
-        """AEC 处理：far-end 参考取嘴最近播放的块；无播放 → 零参考（无回声可消）。
-
-        注意：WebRTC AEC 开启时 far 必填（None 会抛 ValueError，曾打穿监听线程）；
-        零参考等价"当前无回声"，处理结果仍走 NS 降噪，不影响 VAD。
-        """
-        if self.aec is None:
-            return chunk_f32
-        ref = self.mouth.drain_reference() if self.mouth is not None else None
-        if ref is None:
-            ref = np.zeros(len(chunk_f32), dtype=np.float32)
-        return self.aec.process(chunk_f32, ref)
-
-    def _aec_converged(self):
-        """AEC 是否已收敛（本次朗读开始后超过收敛期）。无 AEC → False（永远走旧门控）。"""
-        if self.aec is None:
-            return False
-        if self.mouth is None or self.mouth.speak_started_at == 0.0:
-            return True  # 没有正在进行的朗读：收敛判定无意义，视为已收敛
-        return time.monotonic() - self.mouth.speak_started_at >= self._aec_convergence
+    @property
+    def _window_open(self):
+        """嘴的句间监听窗口是否开着（窗口内耳才拾音）；未装配（None）视为关。"""
+        return self.mouth.window_open if self.mouth is not None else False
 
     def start_threading(self):
         # daemon=True意思是：这个线程是个守护线程，主线程结束了它也会跟着结束，不会阻碍程序退出。
@@ -181,52 +131,35 @@ class Listen(QObject):
         MAX_SILENCE = 45  # 连续静音约 1.5 秒视为说完
         MAX_CHUNKS = 470  # 最长录音约 15 秒，防止缓冲无限增长
         echo_ignored = False  # 正在忽略回声（防每 32ms 重复打印）
-        aec_failed = False  # AEC 运行时异常：回退原始信号，保监听线程不死
         while True:
             voice_buffer = []
             raw_bytes, _overflowed = self.stream.read(self.CHUNK)
             audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-            # AEC：先消回声再打分（far-end 参考来自嘴的播放缓冲；无播放则零参考）
-            try:
-                chunk_clean = self._aec_process(audio_f32)
-            except Exception as e:
-                # 监听线程绝不能死（死了=耳朵聋）；异常降级为原始信号，仅报一次
-                if not aec_failed:
-                    print(f"AEC 处理失败，回退原始信号：{e}")
-                    aec_failed = True
-                chunk_clean = audio_f32
             # 模型打分
-            score = self.vad(chunk_clean)
+            score = self.vad(audio_f32)
             if score >= 0.5:
-                # playing = 后端正在播放（尾巴窗口 speaking=True 但 busy=False → 不判插嘴）
-                playing = self.mouth.busy if self.mouth is not None else False
-                action = echo_gate_action(self._speaking, playing, self.aec is not None, self._aec_converged())
-                if action == "drop":
-                    # 收敛期（或无 AEC）：桃桃朗读时拾到的是扬声器回声。若当真会触发
-                    # interrupt 打断自己（自反馈回环）。忽略：不 reset VAD、不录音，
-                    # 继续读流保持同步（VAD 状态随回声自然回落）
+                # 句间监听窗口方案：句子播放中/余响静默期（speaking 且窗口未开）→
+                # 拾到的必是扬声器回声，忽略（不 reset VAD、不录音，继续读流保持同步）；
+                # 窗口期 → 触发即用户说话 → 主控立即打断（句粒度进度保留）
+                if should_drop_echo(self._speaking, self._window_open):
                     if not echo_ignored:
-                        print("检测到 TTS 播放回声（AEC 收敛期），忽略")
+                        print("检测到 TTS 播放回声，忽略")
                         echo_ignored = True
                     continue
-                if action == "barge_in":
-                    # AEC 已收敛，残差仍触发 VAD = 真人插嘴：立即打断（不等转写），
-                    # 本段录音信任 AEC 判定（播放随即停止，跳过污染检查）
-                    self._barge_in = True
+                if self._speaking:  # 窗口期：用户说话 → 打断
                     self.interrupt_requested.emit()
-                    print(f"检测到用户插嘴，立即打断朗读（VAD {score:.2f}）")
+                    print(f"监听窗口内检测到用户说话，打断朗读（VAD {score:.2f}）")
                 echo_ignored = False
                 print("检测到声音了，开始录音...")
                 self.vad.reset()  # 每段录音前重置 VAD 状态
-                voice_buffer.append(chunk_clean)
+                voice_buffer.append(audio_f32)
                 speaking_flags = []  # 逐块记录：录音段是否叠着 TTS 播放
                 while silence_timeout < MAX_SILENCE and len(voice_buffer) < MAX_CHUNKS:
                     raw_bytes, _overflowed = self.stream.read(self.CHUNK)
                     audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                    chunk_clean = self._aec_process(audio_f32)
 
                     # 模型打分
-                    score = self.vad(chunk_clean)
+                    score = self.vad(audio_f32)
 
                     speaking_flags.append(self._speaking)
 
@@ -236,18 +169,16 @@ class Listen(QObject):
                     else:
                         silence_timeout = 0
 
-                    voice_buffer.append(chunk_clean)
+                    voice_buffer.append(audio_f32)
 
                 silence_timeout = 0
-                barge_in = self._barge_in
-                self._barge_in = False
-                if not barge_in and segment_contaminated(speaking_flags):
+                if segment_contaminated(speaking_flags):
                     # 录音中桃桃开口（如回复很快）：本段必混回声，不转写不 emit
                     print("录音段叠着 TTS 播放，丢弃（疑似回声）")
                     continue
                 print("录音结束，正在转写...")
                 complete_audio_np = np.concatenate(voice_buffer) if voice_buffer else np.zeros(0, dtype=np.float32)
-                # 交给 Whisper 转写（AEC 处理后的浮点信号；插嘴录音已无播放混叠）
+                # 交给 Whisper 转写（float32 原始信号；窗口期录音已无播放混叠）
                 segments, info = self.whisper_model.transcribe(complete_audio_np, beam_size=5, language="zh")
                 transed_text = "".join([segment.text for segment in segments])
                 if transed_text.strip():

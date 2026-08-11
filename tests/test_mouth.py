@@ -5,10 +5,11 @@
 """
 
 import asyncio
+import time
 
 import pytest
 
-from mouth import TTS_ECHO_TAIL, Mouth
+from mouth import SENTENCE_GUARD, SENTENCE_WINDOW, TTS_ECHO_TAIL, Mouth
 
 
 class FakeTTS:
@@ -103,94 +104,33 @@ class TestInterrupt:
         assert mouth.played_text == mouth.tts.played_text
 
 
-class TestReferenceBuffer:
-    """AEC 参考信号：播放音频 tee 成 16k 块缓冲，耳按延迟窗口 drain。"""
+class TestSentenceWindow:
+    """句间监听窗口：guard 静默 → 窗口开（耳拾音）→ 关；后端钩子注入。"""
 
-    def test_tee_resamples_and_chunks(self, mouth):
-        """32k 正弦 0.1s → 16k 块（512/块，尾块补零对齐）。"""
-        import numpy as np
-
-        sr = 32000
-        audio = np.sin(np.arange(int(0.1 * sr)) * 0.1).astype(np.float32)
-        mouth._tee_reference(audio, sr)
-        blocks = [b for _, b in mouth._ref_buf]
-        assert len(blocks) == 4  # 1600 样本 → 3 整块 + 1 补零尾块
-        assert sum(len(b) for b in blocks) == 4 * 512  # 补零后整块对齐
-        assert all(len(b) == 512 for b in blocks)  # 尾块补零对齐麦克风块长
-
-    def test_tee_16k_passthrough(self, mouth):
-        import numpy as np
-
-        audio = np.ones(512, dtype=np.float32)
-        mouth._tee_reference(audio, 16000)
-        assert len(mouth._ref_buf) == 1
-        assert mouth._ref_buf[0][1][0] == 1.0
-
-    def test_tee_uses_play_time_stamp(self, mouth):
-        """t_play 由后端在 sd.play 前记录，块时间戳用它（对齐比 tee 时刻准）。"""
-        import time
-
-        import numpy as np
-
+    def test_gap_flips_window_open_state(self, mouth):
+        """_sentence_gap：窗口在 guard 后打开、在窗口期结束后关闭。"""
+        mouth.window_open = False
         t0 = time.monotonic()
-        mouth._tee_reference(np.ones(512, dtype=np.float32), 16000, t_play=t0)
-        assert mouth._ref_buf[0][0] == t0
+        mouth._sentence_gap()
+        elapsed = time.monotonic() - t0
+        assert elapsed >= SENTENCE_GUARD + SENTENCE_WINDOW
+        assert mouth.window_open is False  # 结束后关闭
 
-    def test_drain_returns_block_played_delay_ago(self, mouth):
-        """只取播放时刻 ≤ now-delay 的块（延迟窗口对齐），未来块不取。"""
-        import time
+    def test_window_is_open_during_listen_phase(self, mouth):
+        """窗口期中途检查：window_open 应为 True（耳据此拾音）。"""
+        import threading
 
-        import numpy as np
+        seen = []
+        threading.Timer(SENTENCE_GUARD + 0.1, lambda: seen.append(mouth.window_open)).start()
+        mouth._sentence_gap()
+        assert seen == [True]
 
-        now = time.monotonic()
-        mouth._ref_buf.append((now - 0.2, np.ones(512, dtype=np.float32)))
-        mouth._ref_buf.append((now, np.full(512, 2.0, dtype=np.float32)))
-        ref = mouth.drain_reference(now, delay=0.15)
-        assert ref is not None and ref[0] == 1.0
+    def test_wires_sentence_done_callback(self):
+        """后端有 sentence_done_callback 属性时，Mouth 注入句间钩子。"""
 
-    def test_drain_keeps_block_for_echo_tail(self, mouth):
-        """窗口式：播放停止后参考仍保留，余响期可重复取用（AEC 消余响必需）。"""
-        import time
-
-        import numpy as np
-
-        now = time.monotonic()
-        mouth._ref_buf.append((now - 0.2, np.ones(512, dtype=np.float32)))
-        assert mouth.drain_reference(now) is not None  # 第一次取到
-        assert len(mouth._ref_buf) == 1  # 未消费
-        assert mouth.drain_reference(now + 0.3) is not None  # 余响期仍可取到
-
-    def test_drain_drops_stale_blocks(self, mouth):
-        """超出余响窗口的旧块被弹出（防无界增长）。"""
-        import time
-
-        import numpy as np
-
-        now = time.monotonic()
-        mouth._ref_buf.append((now - 2.0, np.ones(512, dtype=np.float32)))  # 超龄
-        mouth._ref_buf.append((now - 0.2, np.full(512, 2.0, dtype=np.float32)))
-        ref = mouth.drain_reference(now, keep_echo=1.0)
-        assert ref is not None and ref[0] == 2.0  # 旧块被弹，只留新块
-        assert len(mouth._ref_buf) == 1
-
-    def test_drain_none_when_empty(self, mouth):
-        assert mouth.drain_reference() is None
-
-    def test_speak_clears_reference_buffer(self, mouth):
-        """朗读结束清参考缓冲（防陈旧参考被当成回声去消）。"""
-        import numpy as np
-
-        mouth._ref_buf.append((0.0, np.zeros(512, dtype=np.float32)))
-        asyncio.run(mouth.speak("你好呀"))
-        assert len(mouth._ref_buf) == 0
-        assert mouth.speak_started_at > 0
-
-    def test_wires_ref_callback_to_backend(self):
-        """后端有 ref_callback 属性时，Mouth 注入 tee 钩子。"""
-
-        class BackendWithRef:
+        class BackendWithHook:
             def __init__(self):
-                self.ref_callback = None
+                self.sentence_done_callback = None
 
             async def speak(self, text):
                 pass
@@ -206,6 +146,6 @@ class TestReferenceBuffer:
             def played_text(self):
                 return ""
 
-        b = BackendWithRef()
+        b = BackendWithHook()
         m = Mouth(tts=b)
-        assert b.ref_callback == m._tee_reference  # 绑定方法用 ==（每次访问是新对象）
+        assert b.sentence_done_callback == m._sentence_gap  # 绑定方法用 ==（每次访问是新对象）

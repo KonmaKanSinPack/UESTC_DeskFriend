@@ -3,45 +3,33 @@
 职责：说话。不知道大模型存在——speak(text) 是主控中心（ui/Hutao）的命令，
 interrupt() 返回的打断位置由主控中心决定注入哪里（brain.set_interruption）。
 
-内部消化：
-- TTS 后端装配（create_tts 工厂，照 brain 门面 + backends/ 实现模式；
-  tts.py 保留抽象与后端实现，器官主体不被"未完成"的 CosyVoice2 污染）
-- 回声门控置位/释放：speaking 覆盖合成+播放全段 + 余响尾巴，
-  try/finally 保证被打断/异常路径也释放门控（防"一直忽略用户语音"）
-- finished 信号：朗读结束广播（自然播完或被打断），主控中心可监听做收尾
+打断设计（句粒度监听窗口，2026-08-12 替代 AEC barge-in）：
+- 句子播放中：耳完全不监听（speaking=True 且 window_open=False → 耳 drop）
+- 句与句之间：监听窗口（guard 余响静默 → window 耳拾音）；窗口内 VAD 触发
+  = 用户说话 → 主控立即打断（interrupt_requested 信号）
+- 确定性高于 AEC：无收敛期/对齐/参考缓冲问题，代价是播放中插嘴要等当前句
+  读完、窗口期才被听到
 
-耳朵（listen.py）读 self.speaking 忽略扬声器回声（ui 装配时注入 mouth 引用）。
+内部消化：TTS 后端装配（create_tts 工厂）、speaking 门控、句间监听窗口、
+try/finally 保证门控释放；finished 信号广播朗读结束。
 """
 
 import asyncio
 import time
-from collections import deque
 
-import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from tts import create_tts
 
 # 朗读播完后的扬声器余响尾巴（秒）：期间麦克风拾音仍视为回声
 TTS_ECHO_TAIL = 0.3
-# AEC 参考缓冲：播放 PCM 供耳做回声消除（far-end 参考），块长对齐麦克风 32ms/16k
-AEC_REF_KEEP = 2.0  # 参考保留时长（秒），防无界增长
-AEC_REF_KEEP_ECHO = 1.0  # 余响窗口（秒）：播放停止后参考仍保留供 AEC 消余响
-AEC_REF_CHUNK = 512  # 块长（16kHz × 32ms，与麦克风块对齐）
-AEC_REF_DELAY = 0.15  # 播放→麦克风拾回路径延迟（秒），drain 时按此对齐
-
-
-def _resample_to_16k(audio, sr):
-    """线性重采样到 16k（参考信号够用：AEC 只关心波形大致对应）。"""
-    if sr == 16000:
-        return np.asarray(audio, dtype=np.float32)
-    n = round(len(audio) * 16000 / sr)
-    x_new = np.linspace(0, len(audio) - 1, n)
-    return np.interp(x_new, np.arange(len(audio)), np.asarray(audio, dtype=np.float32)).astype(np.float32)
+# 句间监听窗口（秒）：guard 为上一句余响静默期（耳仍 drop），window 为拾音期
+SENTENCE_GUARD = 0.35  # 余响静默：上一句结尾强音反射未散，此时拾音必误触发
+SENTENCE_WINDOW = 0.6  # 监听窗口：用户在此间说话 → 打断（句粒度进度保留）
 
 
 class Mouth(QObject):
-    """发声器官：speak / interrupt / busy / played_text / speaking 门控。"""
+    """发声器官：speak / interrupt / busy / played_text / speaking 门控 / 监听窗口。"""
 
     finished = pyqtSignal()  # 朗读结束（自然播完或被打断均触发）
 
@@ -49,11 +37,10 @@ class Mouth(QObject):
         """tts 可注入（测试用）；生产路径从 config.toml 经工厂创建（照 Brain 模式）。"""
         super().__init__()
         self.tts = tts or create_tts(config or {})
-        self.speaking = False  # 回声门控：耳朵读它忽略扬声器回声（含余响尾巴）
-        self.speak_started_at = 0.0  # 本次朗读开始时刻（耳判断 AEC 收敛期）
-        self._ref_buf = deque()  # AEC 参考缓冲：(播放时刻, 512块 float32 16k)
-        if hasattr(self.tts, "ref_callback"):  # 后端支持播放上报（SiliconFlow/CosyVoice2）
-            self.tts.ref_callback = self._tee_reference
+        self.speaking = False  # 门控：朗读会话中（含尾巴）；耳据此 drop/监听
+        self.window_open = False  # 句间监听窗口开：耳只在窗口期拾音
+        if hasattr(self.tts, "sentence_done_callback"):  # 后端支持句间钩子
+            self.tts.sentence_done_callback = self._sentence_gap
 
     async def speak(self, text):
         """命令：朗读文本。
@@ -63,52 +50,25 @@ class Mouth(QObject):
         """
         if not text:
             return
-        self.speak_started_at = time.monotonic()
         self.speaking = True
         try:
             await self.tts.speak(text)
         finally:
             await asyncio.sleep(TTS_ECHO_TAIL)
             self.speaking = False
-            self._ref_buf.clear()  # 清参考：防止陈旧参考被当成回声去消
             self.finished.emit()
 
-    def _tee_reference(self, audio, sr, t_play=None):
-        """播放上报：重采样到 16k，按 512 块切分（尾块补零）带播放时刻入参考缓冲。
+    def _sentence_gap(self):
+        """句间监听窗口：guard 余响静默 → 打开窗口 → 关闭。
 
-        t_play 由后端在 sd.play 前一刻记录（实际播放时刻，比 tee 时刻准——
-        每句新建流的启动延迟 70~170ms 逐句变化，用 tee 时刻对齐误差可达 ±100ms）。
+        由后端在每句播完后（非末句）调用，阻塞在 speak 线程 = 播放暂停；
+        窗口内被打断（stop_event 置位）→ 后端循环顶部 break，句粒度终止。
         """
-        a16 = _resample_to_16k(audio, sr)
-        now = time.monotonic()
-        base = t_play if t_play is not None else now
-        for k in range(0, len(a16), AEC_REF_CHUNK):
-            block = a16[k : k + AEC_REF_CHUNK]
-            if len(block) < AEC_REF_CHUNK:
-                block = np.pad(block, (0, AEC_REF_CHUNK - len(block)))
-            self._ref_buf.append((base + k / 16000.0, block))
-        cutoff = now - AEC_REF_KEEP  # 裁剪超龄条目（防无界增长）
-        while self._ref_buf and self._ref_buf[0][0] < cutoff:
-            self._ref_buf.popleft()
-
-    def drain_reference(self, now=None, delay=AEC_REF_DELAY, keep_echo=AEC_REF_KEEP_ECHO):
-        """取播放时刻 ≤ now-delay 的块作当前麦克风块的 far-end 参考；无则 None。
-
-        窗口式（不消费）：块保留 keep_echo 秒供余响期重复取用——声学余响在
-        播放停止后仍持续 ~0.5-2s，若参考随播放结束即耗尽（消费式曾如此），
-        AEC 无参考可消 → 余响直达 VAD → 误判插嘴（真机踩过：句尾"！"强音
-        余响触发 VAD 0.71 自打断）。
-        """
-        if now is None:
-            now = time.monotonic()
-        # 弹出超出余响窗口的旧块（防无界增长）
-        while self._ref_buf and self._ref_buf[0][0] < now - delay - keep_echo:
-            self._ref_buf.popleft()
-        ref = None
-        for t, block in self._ref_buf:  # 取窗口内最新块（播放推进时=新块；余响期=旧块）
-            if t <= now - delay:
-                ref = block
-        return ref
+        self.window_open = False
+        time.sleep(SENTENCE_GUARD)  # 余响静默期：耳仍 drop
+        self.window_open = True
+        time.sleep(SENTENCE_WINDOW)  # 监听窗口：耳拾音，VAD → 打断
+        self.window_open = False
 
     async def interrupt(self) -> str:
         """命令：打断当前朗读，返回已播放文本前缀（打断位置）。
@@ -119,7 +79,7 @@ class Mouth(QObject):
 
     @property
     def busy(self) -> bool:
-        """后端是否正在朗读（不含余响尾巴；尾巴期间 busy=False 但 speaking=True）。"""
+        """后端是否正在朗读（不含尾巴与句间窗口；窗口期 busy=False 但 speaking=True）。"""
         return self.tts.busy
 
     @property

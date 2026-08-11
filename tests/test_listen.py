@@ -1,34 +1,26 @@
 """Listen 回声门控测试（纯逻辑，不实例化 Listen 以免开麦克风流/加载模型）。
 
-门控规则（AEC 轮）：VAD 触发时按「嘴是否发声 + AEC 是否就绪且收敛」三分支决策——
-收敛期（或无 AEC）拾到的语音视为回声丢弃；AEC 收敛后残差触发 = 真人插嘴。
+门控规则（句间监听窗口方案）：VAD 触发时，嘴发声且监听窗口未开（句子播放中/
+余响静默期）→ 视为回声丢弃；窗口期触发 → 用户说话（打断）。
 纯函数提取照 astrbot.py 的 should_observe 模式（便于单测），录音主循环只在关键点调用。
 """
 
-from listen import echo_gate_action, segment_contaminated
+from listen import segment_contaminated, should_drop_echo
 
 
-class TestEchoGateAction:
-    def test_not_speaking_normal(self):
-        """嘴未发声：正常录音（无论 AEC/播放状态）。"""
-        assert echo_gate_action(False, False, True, True) is None
-        assert echo_gate_action(False, True, False, False) is None
+class TestShouldDropEcho:
+    def test_not_speaking_listens(self):
+        """嘴未发声：正常监听（无论窗口状态）。"""
+        assert should_drop_echo(False, False) is False
+        assert should_drop_echo(False, True) is False
 
-    def test_speaking_without_aec_drops(self):
-        """AEC 不可用 → 回退纯门控：发声期间一律丢弃。"""
-        assert echo_gate_action(True, True, False, False) == "drop"
+    def test_speaking_window_closed_drops(self):
+        """句子播放中 / 余响静默期（窗口未开）→ 拾到的必是扬声器回声，丢弃。"""
+        assert should_drop_echo(True, False) is True
 
-    def test_speaking_during_convergence_drops(self):
-        """AEC 收敛期内 → 仍丢弃（回声可能漏过，旧门控兜底）。"""
-        assert echo_gate_action(True, True, True, False) == "drop"
-
-    def test_speaking_tail_window_drops(self):
-        """尾巴窗口（speaking 但后端不在播放）→ 仍丢弃：余响未散，不判插嘴。"""
-        assert echo_gate_action(True, False, True, True) == "drop"
-
-    def test_speaking_after_convergence_barges_in(self):
-        """正在播放且 AEC 已收敛 → 残差触发 = 真人插嘴。"""
-        assert echo_gate_action(True, True, True, True) == "barge_in"
+    def test_speaking_window_open_listens(self):
+        """句间监听窗口 → 拾音（触发即用户说话）。"""
+        assert should_drop_echo(True, True) is False
 
 
 class TestSegmentContaminated:
