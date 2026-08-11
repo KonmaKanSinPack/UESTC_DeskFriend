@@ -9,6 +9,12 @@ import sounddevice as sd
 from faster_whisper import WhisperModel
 from PyQt5.QtCore import QObject, pyqtSignal
 
+# 句间监听窗口：打断需活动度确认——最近 10 块（320ms）中 ≥8 块活跃才算用户说话。
+# 真机实测：播放"呜哇！"后余响尖峰仅 160ms（5 块）连续，不足以触发确认；
+# 真说话（两音节以上）在任意 320ms 窗口内活跃块必 ≥8。
+WINDOW_ACTIVITY_HISTORY = 10  # 活动度窗口（块数，32ms/块）
+WINDOW_INTERRUPT_ACTIVE = 8  # 打断阈值：窗口内活跃块数
+
 
 def should_drop_echo(speaking: bool, window_open: bool) -> bool:
     """门控规则（句间监听窗口方案）：VAD 触发时是否视为回声丢弃（纯逻辑便于单测）。
@@ -16,17 +22,28 @@ def should_drop_echo(speaking: bool, window_open: bool) -> bool:
     - 嘴未发声 → 不丢（正常监听）
     - 嘴发声且监听窗口未开（句子播放中 / 句间余响静默期）→ 丢：此刻拾到的
       必是扬声器回声（播放中或上一句余响），若当真会触发 interrupt 打断自己
-    - 嘴发声且监听窗口开着 → 不丢：窗口期 = 只此期间拾音，触发即用户说话
+    - 嘴发声且监听窗口开着 → 不丢：窗口期 = 只此期间拾音，再经活动度确认
     """
     return speaking and not window_open
 
 
-def segment_contaminated(speaking_flags) -> bool:
+def window_interrupt_confirmed(activity, active_threshold=WINDOW_INTERRUPT_ACTIVE) -> bool:
+    """窗口期打断确认：最近 WINDOW_ACTIVITY_HISTORY 块中活跃 ≥ 阈值才算用户说话。
+
+    余响是衰减尖峰（真机实测 ~160ms = 5 块），真说话持续更久——用活动度
+    而非单块触发，防余响尖峰自打断。
+    """
+    return sum(activity) >= active_threshold
+
+
+def segment_contaminated(playing_flags) -> bool:
     """录音段内任意时刻叠着 TTS 播放 → 本段必混回声，转写结果不可信。
 
-    场景：用户说话录音中，桃桃回复很快开始朗读（或合成结束落盘即播）。
+    注意用「正在播放」（mouth.busy）而非「会话中」（speaking）判断——句间
+    监听窗口内 speaking 恒为 True，若用 speaking 会把窗口期录音误判为污染
+    而丢弃（真机踩过：打断成功但用户的话永远到不了转写）。
     """
-    return any(speaking_flags)
+    return any(playing_flags)
 
 
 class SileroVadOnnx:
@@ -73,6 +90,9 @@ class Listen(QObject):
         # 门控状态由 Mouth 内部管理（speaking 会话 + window_open 句间监听窗口），
         # 耳只读不写
         self.mouth = None
+        # 窗口期打断活动度：最近 N 块 VAD 结果（True=活跃）；确认后才打断
+        self._window_activity = deque(maxlen=WINDOW_ACTIVITY_HISTORY)
+        self._interrupt_sent = False  # 本窗口是否已发打断（防重复触发）
 
         # 音频配置参数 (VAD 要求的标准格式)
         self.SAMPLE_RATE = 16000  # 采样率：16kHz
@@ -116,6 +136,10 @@ class Listen(QObject):
         """嘴的句间监听窗口是否开着（窗口内耳才拾音）；未装配（None）视为关。"""
         return self.mouth.window_open if self.mouth is not None else False
 
+    def _window_interrupt_msg(self) -> str:
+        """窗口期打断日志（活动度摘要）。"""
+        return f"监听窗口内检测到用户说话，打断朗读（{sum(self._window_activity)}/{WINDOW_ACTIVITY_HISTORY} 块活跃）"
+
     def start_threading(self):
         # daemon=True意思是：这个线程是个守护线程，主线程结束了它也会跟着结束，不会阻碍程序退出。
         listen_thread = threading.Thread(target=self.during_listening, daemon=True)
@@ -137,23 +161,32 @@ class Listen(QObject):
             audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
             # 模型打分
             score = self.vad(audio_f32)
+            # 句间监听窗口：活动度累积（每块都记，非窗口期复位）
+            if self._speaking and self._window_open:
+                self._window_activity.append(score >= 0.5)
+                if window_interrupt_confirmed(self._window_activity) and not self._interrupt_sent:
+                    # 最近 320ms 持续活跃 = 真用户说话（余响是单发尖峰，够不着阈值）
+                    self._interrupt_sent = True
+                    self.interrupt_requested.emit()
+                    print(self._window_interrupt_msg())
+            else:
+                if self._window_activity or self._interrupt_sent:
+                    self._window_activity.clear()
+                    self._interrupt_sent = False
             if score >= 0.5:
                 # 句间监听窗口方案：句子播放中/余响静默期（speaking 且窗口未开）→
                 # 拾到的必是扬声器回声，忽略（不 reset VAD、不录音，继续读流保持同步）；
-                # 窗口期 → 触发即用户说话 → 主控立即打断（句粒度进度保留）
+                # 窗口期 → 录音（打断由活动度确认触发）
                 if should_drop_echo(self._speaking, self._window_open):
                     if not echo_ignored:
                         print("检测到 TTS 播放回声，忽略")
                         echo_ignored = True
                     continue
-                if self._speaking:  # 窗口期：用户说话 → 打断
-                    self.interrupt_requested.emit()
-                    print(f"监听窗口内检测到用户说话，打断朗读（VAD {score:.2f}）")
                 echo_ignored = False
                 print("检测到声音了，开始录音...")
                 self.vad.reset()  # 每段录音前重置 VAD 状态
                 voice_buffer.append(audio_f32)
-                speaking_flags = []  # 逐块记录：录音段是否叠着 TTS 播放
+                playing_flags = []  # 逐块记录：录音段是否叠着 TTS 播放
                 while silence_timeout < MAX_SILENCE and len(voice_buffer) < MAX_CHUNKS:
                     raw_bytes, _overflowed = self.stream.read(self.CHUNK)
                     audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
@@ -161,7 +194,15 @@ class Listen(QObject):
                     # 模型打分
                     score = self.vad(audio_f32)
 
-                    speaking_flags.append(self._speaking)
+                    # 窗口期活动度继续累积（打断确认可能发生在录音中）
+                    if self._speaking and self._window_open:
+                        self._window_activity.append(score >= 0.5)
+                        if window_interrupt_confirmed(self._window_activity) and not self._interrupt_sent:
+                            self._interrupt_sent = True
+                            self.interrupt_requested.emit()
+                            print(self._window_interrupt_msg())
+
+                    playing_flags.append(self.mouth.busy if self.mouth is not None else False)
 
                     if score < 0.5:
                         silence_timeout += 1
@@ -172,8 +213,8 @@ class Listen(QObject):
                     voice_buffer.append(audio_f32)
 
                 silence_timeout = 0
-                if segment_contaminated(speaking_flags):
-                    # 录音中桃桃开口（如回复很快）：本段必混回声，不转写不 emit
+                if segment_contaminated(playing_flags):
+                    # 录音中桃桃开播下一句：本段混入播放声，不转写不 emit
                     print("录音段叠着 TTS 播放，丢弃（疑似回声）")
                     continue
                 print("录音结束，正在转写...")

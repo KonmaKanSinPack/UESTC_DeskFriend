@@ -5,7 +5,25 @@
 纯函数提取照 astrbot.py 的 should_observe 模式（便于单测），录音主循环只在关键点调用。
 """
 
-from listen import segment_contaminated, should_drop_echo
+from listen import segment_contaminated, should_drop_echo, window_interrupt_confirmed
+
+
+class TestWindowInterruptConfirmed:
+    """窗口期打断确认：最近 10 块活跃 ≥8 才算用户说话（余响是单发尖峰）。"""
+
+    def test_sustained_speech_confirmed(self):
+        assert window_interrupt_confirmed([True] * 8) is True
+        assert window_interrupt_confirmed([True] * 10) is True
+
+    def test_ring_burst_not_confirmed(self):
+        """余响尖峰（实测 ~5 块）够不着阈值。"""
+        assert window_interrupt_confirmed([True] * 5 + [False] * 5) is False
+
+    def test_mixed_activity_below_threshold(self):
+        assert window_interrupt_confirmed([True, False] * 5) is False
+
+    def test_empty_not_confirmed(self):
+        assert window_interrupt_confirmed([]) is False
 
 
 class TestShouldDropEcho:
