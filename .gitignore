@@ -9,4 +9,5 @@ ruff_cache
 .pytest_cache
 pet.db
 CosyVoice/
-assets/models
+assets/models.venv-cosyvoice/
+assets/models/

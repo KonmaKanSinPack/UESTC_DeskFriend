@@ -145,7 +145,12 @@ class DummyTTS(TTS):
 
 
 class CosyVoice2TTS(TTS):
-    """CosyVoice2 本地合成（零样本克隆音色，GPU）。
+    """CosyVoice2 本地合成（零样本克隆音色，GPU）。⚠️ 未完成：保留待完善。
+
+    已知问题（2026-08-11）：本地推理在 Python 3.12 + 新版依赖栈下输出乱码且
+    速度不稳定（6.7s~386s/句）；官方环境（3.10 + requirements 全量）验证正常。
+    当前主方案为 SiliconFlowTTS（API 托管，1~2s/句稳定）。本实现待完善方向：
+    官方环境常驻服务（.venv-cosyvoice）+ vllm 加速，届时可脱离 API 依赖。
 
     - 模型：首次 speak 时惰性加载（约 10~20s；缺失自动下载，尊重 HF_ENDPOINT 镜像）
     - 合成：逐句 inference_zero_shot（流式 chunk），sounddevice 播放（22050Hz）
@@ -239,11 +244,121 @@ class CosyVoice2TTS(TTS):
         return self._played
 
 
+class SiliconFlowTTS(TTS):
+    """SiliconFlow 托管的 CosyVoice2（OpenAI 兼容 /v1/audio/speech）。
+
+    - 每次请求带 references（参考音频 base64 + 文本）实现零样本克隆，免上传流程
+    - response_format=wav 直接 sounddevice 播放；逐句请求保持句粒度打断
+    - 网络 1~2s/句，质量与官方一致（本地 CosyVoice2 版本栈不稳，此为当前主方案）
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = "https://api.siliconflow.cn/v1",
+        model: str = "FunAudioLLM/CosyVoice2-0.5B",
+        voice_ref: str = "",
+        voice_ref_text: str = "",
+        sample_rate: int = 32000,
+    ):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.voice_ref = voice_ref
+        self.voice_ref_text = voice_ref_text
+        self.sample_rate = sample_rate
+        self._ref_b64 = None  # 参考音频 base64（读一次缓存）
+        self._busy = False
+        self._played = ""
+        self._stop_event = None
+
+    def _ref_audio_b64(self):
+        """参考音频 base64（data URI）；读一次缓存，避免每次请求读盘。"""
+        if self._ref_b64 is None:
+            import base64
+
+            with open(self.voice_ref, "rb") as f:
+                self._ref_b64 = f"data:audio/wav;base64,{base64.b64encode(f.read()).decode()}"
+        return self._ref_b64
+
+    async def speak(self, text: str) -> None:
+        if not text:
+            return
+        try:
+            await asyncio.to_thread(self._speak_sync, text)
+        except Exception as e:
+            logger.error("SiliconFlow TTS 合成失败：%s", e)
+        finally:
+            self._busy = False
+
+    def _speak_sync(self, text: str) -> None:
+        """线程内：逐句请求合成 + 播放（interrupt 可随时打断）。"""
+        from io import BytesIO
+
+        import httpx
+        import sounddevice as sd
+        import soundfile as sf
+
+        if not self.voice_ref or not self.voice_ref_text:
+            raise RuntimeError("SiliconFlow 克隆音色需要配置 TTS_VOICE_REF 与 TTS_VOICE_REF_TEXT")
+        self._busy = True
+        self._played = ""
+        self._stop_event = threading.Event()
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        for sentence in _split_sentences(text):
+            if self._stop_event.is_set():
+                break
+            payload = {
+                "model": self.model,
+                "input": sentence,
+                "references": [{"audio": self._ref_audio_b64(), "text": self.voice_ref_text}],
+                "response_format": "wav",
+                "sample_rate": self.sample_rate,
+            }
+            resp = httpx.post(f"{self.base_url}/audio/speech", headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            audio, sr = sf.read(BytesIO(resp.content))
+            sd.play(audio, sr)
+            sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
+            self._played += sentence  # 该句播放完成（或被中断）
+        if not self._stop_event.is_set():
+            self._played = text  # 全部播完 = 完整文本
+
+    async def interrupt(self) -> str:
+        if self._busy and self._stop_event is not None:
+            self._stop_event.set()
+            try:
+                import sounddevice as sd
+
+                sd.stop()  # 线程安全：立即停止当前播放
+            except Exception:
+                pass
+        prefix, self._played = self._played, ""
+        return prefix
+
+    @property
+    def busy(self) -> bool:
+        return self._busy
+
+    @property
+    def played_text(self) -> str:
+        return self._played
+
+
 def create_tts(config) -> TTS:
     """按配置装配 TTS 后端（照 backends 工厂模式）。"""
     backend = config.get("TTS_BACKEND", "dummy")
     if backend == "none":
         return DummyTTS()  # none 与 dummy 等价：占位链路可用，不发声
+    if backend == "siliconflow":
+        return SiliconFlowTTS(
+            api_key=config.get("TTS_API_KEY", ""),
+            base_url=config.get("TTS_BASE_URL", "https://api.siliconflow.cn/v1"),
+            model=config.get("TTS_MODEL", "FunAudioLLM/CosyVoice2-0.5B"),
+            voice_ref=config.get("TTS_VOICE_REF", ""),
+            voice_ref_text=config.get("TTS_VOICE_REF_TEXT", ""),
+            sample_rate=config.get("TTS_SAMPLE_RATE", 32000),
+        )
     if backend == "cosyvoice2":
         return CosyVoice2TTS(
             model_dir=config.get("TTS_MODEL_DIR", ""),
@@ -252,4 +367,4 @@ def create_tts(config) -> TTS:
         )
     if backend == "dummy":
         return DummyTTS()
-    raise ValueError(f"未知 TTS_BACKEND: {backend!r}（可选：dummy / cosyvoice2 / none）")
+    raise ValueError(f"未知 TTS_BACKEND: {backend!r}（可选：siliconflow / cosyvoice2 / dummy / none）")

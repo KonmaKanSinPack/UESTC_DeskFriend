@@ -7,6 +7,7 @@ from tts import (
     DEFAULT_MODEL_DIR,
     CosyVoice2TTS,
     DummyTTS,
+    SiliconFlowTTS,
     _split_sentences,
     create_tts,
     ensure_cosyvoice_model,
@@ -63,6 +64,70 @@ class TestCosyVoice2TTS:
     def test_interrupt_when_idle_returns_empty(self, tmp_path, monkeypatch):
         monkeypatch.setattr("tts.ensure_cosyvoice_model", lambda d: tmp_path)
         tts = CosyVoice2TTS()
+        assert asyncio.run(tts.interrupt()) == ""
+
+
+class TestSiliconFlowTTS:
+    """SiliconFlowTTS：mock httpx 验证请求构造与播放链路（不真调 API）。"""
+
+    @staticmethod
+    def _fake_wav_bytes():
+        import io
+
+        import numpy as np
+        import soundfile as sf
+
+        buf = io.BytesIO()
+        sf.write(buf, np.zeros(1600, dtype=np.float32), 16000, format="WAV")
+        return buf.getvalue()
+
+    def test_ref_audio_b64_cached(self, tmp_path, monkeypatch):
+        ref = tmp_path / "ref.wav"
+        sf = __import__("soundfile")
+        sf.write(str(ref), [0.0] * 100, 16000)
+        tts = SiliconFlowTTS(api_key="k", voice_ref=str(ref), voice_ref_text="文本")
+        b1 = tts._ref_audio_b64()
+        b2 = tts._ref_audio_b64()
+        assert b1 == b2
+        assert b1.startswith("data:audio/wav;base64,")
+
+    def test_speak_sends_references_and_plays(self, tmp_path, monkeypatch):
+        ref = tmp_path / "ref.wav"
+        __import__("soundfile").write(str(ref), [0.0] * 100, 16000)
+        tts = SiliconFlowTTS(api_key="k", voice_ref=str(ref), voice_ref_text="参考文本")
+        sent = {}
+        played = []
+
+        class FakeResp:
+            content = TestSiliconFlowTTS._fake_wav_bytes()
+
+            def raise_for_status(self):
+                pass
+
+        def fake_post(url, headers, json, timeout):
+            sent.update({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return FakeResp()
+
+        def fake_play(audio, sr):
+            played.append((len(audio), sr))
+
+        monkeypatch.setattr("httpx.post", fake_post)
+        monkeypatch.setattr("sounddevice.play", fake_play)
+        monkeypatch.setattr("sounddevice.wait", lambda: None)
+        asyncio.run(tts.speak("你好呀。我是桃桃。"))
+        assert sent["url"] == "https://api.siliconflow.cn/v1/audio/speech"
+        assert sent["headers"]["Authorization"] == "Bearer k"
+        assert sent["json"]["references"][0]["text"] == "参考文本"
+        assert sent["json"]["response_format"] == "wav"
+        assert tts.busy is False
+
+    def test_missing_voice_ref_raises_and_no_crash(self, tmp_path):
+        tts = SiliconFlowTTS(api_key="k")
+        asyncio.run(tts.speak("你好"))
+        assert tts.busy is False
+
+    def test_interrupt_when_idle_returns_empty(self):
+        tts = SiliconFlowTTS(api_key="k")
         assert asyncio.run(tts.interrupt()) == ""
 
 
