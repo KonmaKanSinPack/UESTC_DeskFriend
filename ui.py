@@ -53,7 +53,7 @@ class DeskFriend(QWidget):
 
         # 文字输入框：单击桌宠唤起，回车发送，Esc 收起
         self.input_box = QLineEdit(self)
-        self.input_box.setPlaceholderText("和糯糯说点什么…")
+        self.input_box.setPlaceholderText("和桃桃说点什么…")
         self.input_box.setMaximumWidth(280)
         self.input_box.hide()
         self.input_box.returnPressed.connect(self.on_input_submitted)
@@ -93,7 +93,7 @@ class DeskFriend(QWidget):
         self.listen = Listen()
         self.mouth = Mouth(load_config())  # 发声器官（嘴）：朗读 + 打断 + 回声门控
         self.listen.mouth = self.mouth  # 耳朵引用嘴：朗读期间忽略扬声器回声
-        # 插嘴打断：AEC 收敛后 VAD 触发 → 立即打断（不等转写），复用现有注入链路
+        # 插嘴打断：句间监听窗口内检测到用户说话 → 打断（复用现有注入链路）
         self.listen.interrupt_requested.connect(self._interrupt_tts)
 
         # 连接听觉信号到处理函数
