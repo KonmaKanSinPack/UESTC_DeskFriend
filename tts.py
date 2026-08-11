@@ -167,6 +167,7 @@ class CosyVoice2TTS(TTS):
         self._prompt_speech = None
         self._busy = False
         self._played = ""
+        self._speaking_text = ""  # 本次朗读全文（interrupt 防误报用）
         self._stop_event = None
 
     def _load(self):
@@ -207,6 +208,7 @@ class CosyVoice2TTS(TTS):
         self._load()
         self._busy = True
         self._played = ""
+        self._speaking_text = text
         self._stop_event = threading.Event()
         import sounddevice as sd
 
@@ -233,6 +235,8 @@ class CosyVoice2TTS(TTS):
             except Exception:
                 pass
         prefix, self._played = self._played, ""
+        if prefix == self._speaking_text:  # 完整播完（含竞态窗口），非打断 → 不误报
+            return ""
         return prefix
 
     @property
@@ -270,6 +274,7 @@ class SiliconFlowTTS(TTS):
         self._ref_b64 = None  # 参考音频 base64（读一次缓存）
         self._busy = False
         self._played = ""
+        self._speaking_text = ""  # 本次朗读全文（interrupt 防误报用）
         self._stop_event = None
 
     def _ref_audio_b64(self):
@@ -303,6 +308,7 @@ class SiliconFlowTTS(TTS):
             raise RuntimeError("SiliconFlow 克隆音色需要配置 TTS_VOICE_REF 与 TTS_VOICE_REF_TEXT")
         self._busy = True
         self._played = ""
+        self._speaking_text = text
         self._stop_event = threading.Event()
         headers = {"Authorization": f"Bearer {self.api_key}"}
         for sentence in _split_sentences(text):
@@ -334,6 +340,8 @@ class SiliconFlowTTS(TTS):
             except Exception:
                 pass
         prefix, self._played = self._played, ""
+        if prefix == self._speaking_text:  # 完整播完（含竞态窗口），非打断 → 不误报
+            return ""
         return prefix
 
     @property

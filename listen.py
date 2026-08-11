@@ -10,6 +10,23 @@ from faster_whisper import WhisperModel
 from PyQt5.QtCore import QObject, pyqtSignal
 
 
+def is_echo_trigger(score: float, speaking: bool) -> bool:
+    """VAD 触发但桃桃正在朗读 → 该语音块是扬声器回声（自己声音被麦克风拾回）。
+
+    回声若当真会触发 on_heard_text → interrupt 打断自己（甚至自回复回环）。
+    纯逻辑便于单测（照 astrbot.py 的 should_observe 模式）。
+    """
+    return speaking and score >= 0.5
+
+
+def segment_contaminated(speaking_flags) -> bool:
+    """录音段内任意时刻叠着 TTS 播放 → 本段必混回声，转写结果不可信。
+
+    场景：用户说话录音中，桃桃回复很快开始朗读（或合成结束落盘即播）。
+    """
+    return any(speaking_flags)
+
+
 class SileroVadOnnx:
     """直接调用 silero_vad.onnx 打分，不依赖 torch。
 
@@ -49,6 +66,8 @@ class Listen(QObject):
     def __init__(self, history_length=5):
         super().__init__()
         self.listen_history = deque(maxlen=history_length)
+        # 回声门控：TTS 朗读中置位（ui 驱动），期间麦克风拾到的语音视为回声丢弃
+        self.speaking = False
 
         # 音频配置参数 (VAD 要求的标准格式)
         self.SAMPLE_RATE = 16000  # 采样率：16kHz
@@ -96,6 +115,7 @@ class Listen(QObject):
         # 每块 512 帧 @16kHz ≈ 32ms
         MAX_SILENCE = 45  # 连续静音约 1.5 秒视为说完
         MAX_CHUNKS = 470  # 最长录音约 15 秒，防止缓冲无限增长
+        echo_ignored = False  # 正在忽略回声（防每 32ms 重复打印）
         while True:
             voice_buffer = []
             raw_bytes, _overflowed = self.stream.read(self.CHUNK)
@@ -103,15 +123,27 @@ class Listen(QObject):
             # 模型打分
             score = self.vad(audio_f32)
             if score >= 0.5:
+                # 回声门控：桃桃朗读时麦克风拾到的是扬声器回声。若当真会触发
+                # on_heard_text → interrupt 打断自己（自反馈回环）。忽略即可：
+                # 不 reset VAD、不录音，继续读流保持同步（VAD 状态随回声自然回落）
+                if is_echo_trigger(score, self.speaking):
+                    if not echo_ignored:
+                        print("检测到 TTS 播放回声，忽略")
+                        echo_ignored = True
+                    continue
+                echo_ignored = False
                 print("检测到声音了，开始录音...")
                 self.vad.reset()  # 每段录音前重置 VAD 状态
                 voice_buffer.append(raw_bytes)
+                speaking_flags = []  # 逐块记录：录音段是否叠着 TTS 播放
                 while silence_timeout < MAX_SILENCE and len(voice_buffer) < MAX_CHUNKS:
                     raw_bytes, _overflowed = self.stream.read(self.CHUNK)
                     audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
                     # 模型打分
                     score = self.vad(audio_f32)
+
+                    speaking_flags.append(self.speaking)
 
                     if score < 0.5:
                         silence_timeout += 1
@@ -121,6 +153,11 @@ class Listen(QObject):
 
                     voice_buffer.append(raw_bytes)
 
+                silence_timeout = 0
+                if segment_contaminated(speaking_flags):
+                    # 录音中桃桃开口（如回复很快）：本段必混回声，不转写不 emit
+                    print("录音段叠着 TTS 播放，丢弃（疑似回声）")
+                    continue
                 print("录音结束，正在转写...")
                 complete_audio_bytes = b"".join(voice_buffer)
                 complete_audio_np = np.frombuffer(complete_audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
@@ -129,4 +166,3 @@ class Listen(QObject):
                 transed_text = "".join([segment.text for segment in segments])
                 if transed_text.strip():
                     self.get_voice_text(transed_text)
-                silence_timeout = 0

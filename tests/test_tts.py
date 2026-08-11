@@ -66,6 +66,18 @@ class TestCosyVoice2TTS:
         tts = CosyVoice2TTS()
         assert asyncio.run(tts.interrupt()) == ""
 
+    def test_interrupt_after_full_playback_returns_empty(self, tmp_path, monkeypatch):
+        """竞态修复：最后一句完整播完但 busy 未复位时 interrupt → 完整文本不误报为打断位置。"""
+        import threading
+
+        monkeypatch.setattr("tts.ensure_cosyvoice_model", lambda d: tmp_path)
+        tts = CosyVoice2TTS(voice_ref="ref.wav", voice_ref_text="参考文本")
+        tts._busy = True
+        tts._stop_event = threading.Event()
+        tts._played = "完整文本"
+        tts._speaking_text = "完整文本"
+        assert asyncio.run(tts.interrupt()) == ""
+
 
 class TestSiliconFlowTTS:
     """SiliconFlowTTS：mock httpx 验证请求构造与播放链路（不真调 API）。"""
@@ -129,6 +141,28 @@ class TestSiliconFlowTTS:
     def test_interrupt_when_idle_returns_empty(self):
         tts = SiliconFlowTTS(api_key="k")
         assert asyncio.run(tts.interrupt()) == ""
+
+    def test_interrupt_after_full_playback_returns_empty(self):
+        """竞态修复：最后一句完整播完但 busy 未复位时 interrupt → 完整文本不误报为打断位置。"""
+        import threading
+
+        tts = SiliconFlowTTS(api_key="k")
+        tts._busy = True
+        tts._stop_event = threading.Event()
+        tts._played = "完整文本"
+        tts._speaking_text = "完整文本"
+        assert asyncio.run(tts.interrupt()) == ""
+
+    def test_interrupt_mid_speech_returns_partial_prefix(self):
+        """朗读中打断 → 只返回已播部分（不能把全文当打断位置）。"""
+        import threading
+
+        tts = SiliconFlowTTS(api_key="k")
+        tts._busy = True
+        tts._stop_event = threading.Event()
+        tts._played = "第一句。"
+        tts._speaking_text = "第一句。第二句。"
+        assert asyncio.run(tts.interrupt()) == "第一句。"
 
 
 class TestSplitSentences:

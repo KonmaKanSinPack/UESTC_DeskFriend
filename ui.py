@@ -16,6 +16,7 @@ from vision import Vision
 
 PROJECT_DIR = Path(__file__).parent
 SPRITE_WIDTH = 150  # 贴图统一缩放到这个宽度
+TTS_ECHO_TAIL = 0.3  # 朗读播完后的扬声器余响尾巴（秒），期间麦克风拾音仍视为回声
 
 
 def load_config():
@@ -143,8 +144,10 @@ class DeskFriend(QWidget):
         print(response.content)
         self._anim_state = "talking"
         self.show_bubble(response.content)
-        # 朗读回复（异步不阻塞对话队列；TTS 后端由 config 选择）
-        asyncio.get_event_loop().create_task(self.tts.speak(response.content))
+        # 朗读回复：speak 前置位回声门控（覆盖合成+播放全段），结束后延迟释放
+        # （异步不阻塞对话队列；TTS 后端由 config 选择）
+        self.listen.speaking = True
+        asyncio.get_event_loop().create_task(self._speak_then_release(response.content))
         # 回复已展示，再后台做记忆压缩（超限时把最老轮次并入摘要，失败不影响对话）
         await self.brain.maybe_compress()
         # 批量抽取自上次以来的事实（含此前攒下的背景谈话，失败不影响对话）
@@ -178,6 +181,17 @@ class DeskFriend(QWidget):
         else:
             offset = QPoint(0, round(2 * math.sin(self._anim_phase)))  # 缓慢呼吸
         self.move(self._base_pos + offset)
+
+    async def _speak_then_release(self, text):
+        """朗读回复，结束后延迟释放回声门控（扬声器余响尾巴）。
+
+        try/finally 保证无论朗读是否被打断都释放门控，防止"一直忽略用户语音"。
+        """
+        try:
+            await self.tts.speak(text)
+        finally:
+            await asyncio.sleep(TTS_ECHO_TAIL)
+            self.listen.speaking = False
 
     def _interrupt_tts(self):
         """用户新消息到达：打断朗读并记录打断位置（异步不阻塞入队）。"""
