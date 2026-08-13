@@ -50,6 +50,7 @@
 10. **长期记忆用事实表 + LLM 抽取**：`facts` 表存结构化事实（如"用户在 UESTC 读书"），抽取/去重/更新/删除全部交给 LLM 输出 JSON 操作完成，不写自研相似度去重；facts 量小，全量注入 system prompt，不做检索。
 11. **语义检索走降级路线**：优先 SQLite FTS5 关键词检索（内置、零依赖）；embedding top-k 仅列为远期候选（端点支持则用 API，否则本地小模型），不在初期目标内。
 12. **器官化架构哲学（各司其职，2026-08-11 确立）**：大模型（大脑）只输出意图、绝不碰物理硬件；器官（listen/mouth/vision）是纯物理层，不调用 LLM、不依赖 brain；主控中心（ui）监听器官信号、编排一切。硬规则与判定清单见独立指导文件 **`docs/ARCHITECTURE.md`**（开发前必读，CLAUDE.md 已挂引用）。
+13. **ui.py 拆分为 skin（外观器官）+ spine（主控中枢）（2026-08-13）**：ui.py 同时承担外观（贴图/气泡/输入框/动画/拖拽/双击彩蛋）与编排（器官装配/消息队列/should_reply/do_response/tool_executer/打断编排）两类职责，违反决策 12「主控中枢不堆器官实现细节」。拆为 **`skin.py`**（`Skin(QWidget)` 外观器官：广播 `text_submitted`/`touched` 信号、接受 `show_bubble`/`set_anim_state` 命令，不认 brain/LLM）+ **`spine.py`**（`Spine` 主控中枢，plain class 非 QObject → 协程槽用 `create_task` 而非 `@qasync.asyncSlot`，消费者任务在 `start()` 起，编排逻辑首次可单测）。原则：**零行为变化纯搬移**。顺带删除死状态 `on_timer_trick`（10s 定时截屏喂养无人消费的 `vision.history`）。方案与实施记录见 `docs/session/2026-08-13.md`。
 
 ## 4. 分阶段任务
 
