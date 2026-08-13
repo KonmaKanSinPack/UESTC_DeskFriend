@@ -133,6 +133,27 @@ class TestSiliconFlowTTS:
         assert sent["json"]["response_format"] == "wav"
         assert tts.busy is False
 
+    def test_playing_flag_toggles_around_play(self, tmp_path, monkeypatch):
+        """playing 在 sd.play 一句时为 True、播完复位 False（耳污染判定用，区别于 busy）。"""
+        ref = tmp_path / "ref.wav"
+        __import__("soundfile").write(str(ref), [0.0] * 100, 16000)
+        tts = SiliconFlowTTS(api_key="k", voice_ref=str(ref), voice_ref_text="参考文本")
+
+        class FakeResp:
+            content = TestSiliconFlowTTS._fake_wav_bytes()
+
+            def raise_for_status(self):
+                pass
+
+        states = []
+        monkeypatch.setattr("httpx.post", lambda *a, **k: FakeResp())
+        monkeypatch.setattr("sounddevice.play", lambda a, sr: states.append(("play", tts.playing)))
+        monkeypatch.setattr("sounddevice.wait", lambda: states.append(("wait", tts.playing)))
+        asyncio.run(tts.speak("你好呀。"))
+        assert ("play", True) in states  # sd.play 时 playing 已置 True
+        assert tts.playing is False  # 播完复位
+        assert tts.busy is False
+
     def test_missing_voice_ref_raises_and_no_crash(self, tmp_path):
         tts = SiliconFlowTTS(api_key="k")
         asyncio.run(tts.speak("你好"))

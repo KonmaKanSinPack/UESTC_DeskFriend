@@ -121,8 +121,19 @@ class Mouth(QObject):
 
     @property
     def busy(self) -> bool:
-        """后端是否正在朗读（不含尾巴与句间窗口；窗口期 busy=False 但 speaking=True）。"""
+        """后端 speak 会话是否进行中（含句间监听窗口 / 合成期，均为 True）。
+
+        注意：窗口期 busy 仍为 True（speak 未返回）——要判「此刻真的在播一句」用 playing。
+        """
         return self.tts.busy
+
+    @property
+    def playing(self) -> bool:
+        """此刻是否正在播放一句音频（句间窗口 / 合成期为 False）；耳的污染判定用。
+
+        无 playing 属性的后端（测试替身）回退 busy（保守：更倾向判污染，不会更不安全）。
+        """
+        return getattr(self.tts, "playing", self.tts.busy)
 
     @property
     def played_text(self) -> str:

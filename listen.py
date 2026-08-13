@@ -41,11 +41,13 @@ def window_interrupt_confirmed(activity, active_threshold=WINDOW_INTERRUPT_ACTIV
 
 
 def segment_contaminated(playing_flags) -> bool:
-    """录音段内任意时刻叠着 TTS 播放 → 本段必混回声，转写结果不可信。
+    """录音段内任意时刻叠着 TTS 真实播放 → 本段必混回声，转写结果不可信。
 
-    注意用「正在播放」（mouth.busy）而非「会话中」（speaking）判断——句间
-    监听窗口内 speaking 恒为 True，若用 speaking 会把窗口期录音误判为污染
-    而丢弃（真机踩过：打断成功但用户的话永远到不了转写）。
+    用「此刻正在播一句」（mouth.playing）判断，而非「会话中」（speaking）或
+    「speak 进行中」（busy）——句间监听窗口内 speaking 与 busy 都恒为 True，
+    用它们会把窗口期干净录音整段误判污染丢弃（真机踩过：打断成功但用户的话
+    永远到不了转写）。playing 只在 sd.play 一句时为 True、句间/合成期为 False，
+    故只丢真正叠进下一句播放的录音段。
     """
     return any(playing_flags)
 
@@ -223,7 +225,7 @@ class Listen(QObject):
                     # 窗口期活动度继续累积（打断确认可能发生在录音中）
                     self._window_tick(score)
 
-                    playing_flags.append(self.mouth.busy if self.mouth is not None else False)
+                    playing_flags.append(self.mouth.playing if self.mouth is not None else False)
 
                     if score < 0.5:
                         silence_timeout += 1

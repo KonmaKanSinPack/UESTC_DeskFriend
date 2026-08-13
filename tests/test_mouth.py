@@ -106,6 +106,28 @@ class TestInterrupt:
         assert mouth.played_text == mouth.tts.played_text
 
 
+class TestPlayingSignal:
+    """mouth.playing：区分「此刻真在播一句」vs「speak 会话中(busy)」，耳污染判定用。"""
+
+    def test_falls_back_to_busy_without_playing_attr(self):
+        """测试替身无 playing 属性 → 回退 busy（保守）。"""
+        m = Mouth(tts=FakeTTS())
+        m.tts._busy = True
+        assert m.playing is True
+        m.tts._busy = False
+        assert m.playing is False
+
+    def test_forwards_playing_decoupled_from_busy(self):
+        """后端有 playing：句间窗口 busy=True 但 playing=False → mouth.playing=False。"""
+        fake = FakeTTS()
+        fake._busy = True
+        fake.playing = False  # getattr 命中实例属性，模拟句间窗口（在播为 False）
+        m = Mouth(tts=fake)
+        assert m.playing is False  # 转发 playing，不受 busy 干扰
+        fake.playing = True
+        assert m.playing is True
+
+
 class TestSpeakSerialization:
     def test_concurrent_speaks_serialize(self):
         """连续回复（双击/快速消息）按序朗读，不双流叠播。"""

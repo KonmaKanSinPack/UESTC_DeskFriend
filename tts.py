@@ -99,6 +99,16 @@ class TTS(ABC):
 
     @property
     @abstractmethod
+    def playing(self) -> bool:
+        """此刻是否正在播放一句音频（sd.play 进行中）。
+
+        与 busy 的区别：busy = 整个 speak 会话进行中（含句间监听窗口 / 合成期）；
+        playing 仅在真正 sd.play 一句时为 True，句间窗口 / 合成期为 False。
+        耳的污染判定用它区分「录音叠着真实播放」（真回声）vs「窗口期干净录音」。
+        """
+
+    @property
+    @abstractmethod
     def played_text(self) -> str:
         """当前（或最近一次）朗读中已播放的文本前缀；无播放返回空串。"""
 
@@ -151,6 +161,10 @@ class DummyTTS(TTS):
     def played_text(self) -> str:
         return self._played
 
+    @property
+    def playing(self) -> bool:
+        return self._busy  # Dummy 无真实播放，回退 busy
+
 
 class CosyVoice2TTS(TTS):
     """CosyVoice2 本地合成（零样本克隆音色，GPU）。⚠️ 未完成：保留待完善。
@@ -174,6 +188,7 @@ class CosyVoice2TTS(TTS):
         self._model = None
         self._prompt_speech = None
         self._busy = False
+        self._playing = False  # 精确“此刻正在 sd.play 一句”；句间窗口/合成期为 False（耳污染判定用）
         self._played = ""
         self._speaking_text = ""  # 本次朗读全文（interrupt 防误报用）
         self._stop_event = None
@@ -230,8 +245,10 @@ class CosyVoice2TTS(TTS):
                 if self._stop_event.is_set():
                     break
                 audio = chunk["tts_speech"].cpu().numpy().flatten()
+                self._playing = True
                 sd.play(audio, samplerate=COSYVOICE2_SAMPLE_RATE)
                 sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
+                self._playing = False
             self._played += sentence  # 该句播放完成（或被中断时已尽力播放）
             # 句间监听窗口：非末句播完调用（阻塞 = 播放暂停；窗口内被打断 → 循环顶部 break）
             if self.sentence_done_callback is not None and i < len(sentences):
@@ -261,6 +278,10 @@ class CosyVoice2TTS(TTS):
     def played_text(self) -> str:
         return self._played
 
+    @property
+    def playing(self) -> bool:
+        return self._playing
+
 
 class SiliconFlowTTS(TTS):
     """SiliconFlow 托管的 CosyVoice2（OpenAI 兼容 /v1/audio/speech）。
@@ -287,6 +308,7 @@ class SiliconFlowTTS(TTS):
         self.sample_rate = sample_rate
         self._ref_b64 = None  # 参考音频 base64（读一次缓存）
         self._busy = False
+        self._playing = False  # 精确“此刻正在 sd.play 一句”；句间窗口/合成期为 False（耳污染判定用）
         self._played = ""
         self._speaking_text = ""  # 本次朗读全文（interrupt 防误报用）
         self._stop_event = None
@@ -379,9 +401,11 @@ class SiliconFlowTTS(TTS):
                 seg = int(0.05 * sr)
                 tail_rms = float(np.sqrt(np.mean(np.asarray(audio[-seg:]) ** 2))) if len(audio) else 0.0
                 head_rms = float(np.sqrt(np.mean(np.asarray(audio[:seg]) ** 2))) if len(audio) else 0.0
+                self._playing = True
                 sd.play(audio, sr)
                 t2 = time.monotonic()
                 sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
+                self._playing = False
                 t3 = time.monotonic()
                 flag = ""
                 if t3 - t2 < wav_len - 0.2:
@@ -425,6 +449,10 @@ class SiliconFlowTTS(TTS):
     @property
     def played_text(self) -> str:
         return self._played
+
+    @property
+    def playing(self) -> bool:
+        return self._playing
 
 
 def create_tts(config) -> TTS:
