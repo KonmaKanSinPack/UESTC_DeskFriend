@@ -8,7 +8,8 @@ import onnxruntime  # noqa: F401
 import qasync
 from PyQt5.QtWidgets import QApplication
 
-from ui import DeskFriend
+from skin import Skin
+from spine import Spine
 
 if __name__ == "__main__":
     # Qt 事件循环不返回 Python 解释器，SIGINT 的 Python 处理器永远得不到执行，
@@ -20,8 +21,10 @@ if __name__ == "__main__":
     loop = qasync.QEventLoop(app)  # 创建兼容PyQt的异步事件
     asyncio.set_event_loop(loop)  # 设置异步事件循环
 
-    pet = DeskFriend()
-    pet.show()
+    face = Skin()  # 外观器官（窗口本体）
+    spine = Spine(face=face)  # 主控中枢：内部装配 brain/vision/listen/mouth 并接线
+    spine.start()  # 起消费者任务（loop 已 set 未 run，走 get_event_loop 回退分支）
+    face.show()
 
     with loop:
         loop.run_forever()
