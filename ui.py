@@ -146,6 +146,10 @@ class DeskFriend(QWidget):
         print(response.content)
         self._anim_state = "talking"
         self.show_bubble(response.content)
+        # 桥超时/断线兜底（answered=False）：气泡给反馈，但不朗读——否则兜底文案被
+        # 扬声器放出→麦克风拾回→回声自回复环（详见 docs/session/2026-08-13.md 组B）
+        if not response.answered:
+            return
         # 朗读回复（异步不阻塞对话队列；门控置位/尾巴释放由 Mouth 内部消化）
         asyncio.get_event_loop().create_task(self.mouth.speak(response.content))
         # 回复已展示，再后台做记忆压缩（超限时把最老轮次并入摘要，失败不影响对话）

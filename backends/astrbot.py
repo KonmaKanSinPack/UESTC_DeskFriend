@@ -219,7 +219,9 @@ class AstrBotBackend(ReplyBackend):
 
         content = clean_markdown(reply.replace(LOOK_AT_SCREEN_MARKER, ""))
         if not content:
-            content = "（桃桃没有回应…）"
+            # 桥超时/断线/空回复：兜底文案仅供气泡反馈，标记 answered=False，
+            # 让主控不朗读它——否则被扬声器放出→麦克风拾回→回声自回复环
+            return BackendResponse(content="（桃桃没有回应…）", answered=False)
         return BackendResponse(content=content)
 
     async def get_response_with_context(self, context, model=None, use_tools=False):

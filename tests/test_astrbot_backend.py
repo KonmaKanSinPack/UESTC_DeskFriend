@@ -68,6 +68,7 @@ class TestConversation:
         resp = asyncio.run(backend.get_llm_response("你好"))
         assert resp.content == "你好呀"
         assert resp.tool_calls == []
+        assert resp.answered is True  # 真实回复 → 主控朗读
         assert backend.bridge.sent == [[{"type": "text", "data": {"text": "你好"}}]]
 
     def test_interruption_marker_injected_and_cleared(self, backend):
@@ -106,11 +107,13 @@ class TestConversation:
         resp = asyncio.run(backend.get_llm_response([tool_msg]))
         assert backend.bridge.sent == [[{"type": "text", "data": {"text": "…"}}]]
         assert resp.content == "（桃桃没有回应…）"
+        assert resp.answered is False
 
     def test_no_reply_fallback(self, backend):
         backend.bridge.replies = [""]
         resp = asyncio.run(backend.get_llm_response("在吗"))
         assert resp.content == "（桃桃没有回应…）"
+        assert resp.answered is False  # 兜底非真实回复 → 主控不朗读（防回声自回复环）
 
 
 class TestLookAtScreenProtocol:
