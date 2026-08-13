@@ -136,6 +136,41 @@ class TestEchoLike:
         assert echo_like("你好", "") is False
 
 
+class TestIsEchoDualReference:
+    """is_echo 双参考：当前在播 played_text + 最近一次已播 _last_spoken。
+
+    竞态根因：真后端 _speak_sync 开头把 _played=""，两次串行 speak 之间余响转写
+    到达时只读 played_text 会漏判；_last_spoken 跨清空保留，堵住这个窗口。
+    """
+
+    def test_last_spoken_snapshot_after_speak(self):
+        """speak 收尾把已播文本快照进 _last_spoken。"""
+        m = Mouth(tts=FakeTTS())
+        asyncio.run(m.speak("（桃桃没有回应…）"))
+        assert m._last_spoken == "（桃桃没有回应…）"
+
+    def test_is_echo_hits_last_spoken_after_played_cleared(self):
+        """下一次 speak 已清空 tts._played，is_echo 仍靠 _last_spoken 命中余响。"""
+        m = Mouth(tts=FakeTTS())
+        asyncio.run(m.speak("（桃桃没有回应…）"))  # _last_spoken 快照
+        m.tts._played = ""  # 模拟下一次 speak 开头清空 _played
+        assert m.is_echo("桃桃沒有回應") is True  # played_text 空，_last_spoken 兜住
+
+    def test_is_echo_still_uses_current_played(self):
+        """当前在播路径不变：played_text 命中即判回声。"""
+        m = Mouth(tts=FakeTTS())
+        m.tts._played = "（桃桃没有回应…）"
+        m._last_spoken = ""
+        assert m.is_echo("桃桃沒有回應") is True
+
+    def test_is_echo_false_when_both_unrelated(self):
+        """双参考都不像 → 真人说话，不判回声。"""
+        m = Mouth(tts=FakeTTS())
+        m.tts._played = ""
+        m._last_spoken = "今天天气不错"
+        assert m.is_echo("我们下课去吃饭吧") is False
+
+
 class TestSentenceWindow:
     """句间监听窗口：guard 静默 → 窗口开（耳拾音）→ 关；后端钩子注入。"""
 

@@ -23,8 +23,9 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from tts import create_tts
 
-# 朗读播完后的扬声器余响尾巴（秒）：期间麦克风拾音仍视为回声
-TTS_ECHO_TAIL = 0.3
+# 朗读播完后的扬声器余响尾巴（秒）：期间麦克风拾音仍视为回声。
+# 实测余响 ~1.3s，尾巴取 0.8 覆盖大部分；剩余长尾由 race-free 的 is_echo 内容兜底
+TTS_ECHO_TAIL = 0.8
 # 句间监听窗口（秒）：guard 为上一句余响静默期（耳仍 drop），window 为拾音期
 SENTENCE_GUARD = 0.35  # 余响静默：上一句结尾强音反射未散，此时拾音必误触发
 SENTENCE_WINDOW = 0.6  # 监听窗口：用户在此间说话 → 打断（句粒度进度保留）
@@ -62,6 +63,7 @@ class Mouth(QObject):
         self.tts = tts or create_tts(config or {})
         self.speaking = False  # 门控：朗读会话中（含尾巴）；耳据此 drop/监听
         self.window_open = False  # 句间监听窗口开：耳只在窗口期拾音
+        self._last_spoken = ""  # 最近一次已播文本（is_echo 参考，跨下次 speak 的 _played="" 保留）
         self._speak_lock = asyncio.Lock()  # 串行化：连续回复按序朗读，杜绝双流叠播
         if hasattr(self.tts, "sentence_done_callback"):  # 后端支持句间钩子
             self.tts.sentence_done_callback = self._sentence_gap
@@ -81,6 +83,9 @@ class Mouth(QObject):
             try:
                 await self.tts.speak(text)
             finally:
+                # 先快照已播文本供回声内容兜底：tts._played 会在下次 speak 开头清空，
+                # 若 is_echo 只读 tts.played_text，两次串行 speak 之间余响转写会漏判
+                self._last_spoken = self.tts.played_text or text
                 await asyncio.sleep(TTS_ECHO_TAIL)
                 self.speaking = False
                 self.finished.emit()
@@ -89,9 +94,11 @@ class Mouth(QObject):
         """转写结果是否像刚朗读的内容（回声兜底，主控中心丢弃幽灵消息用）。
 
         播放结束后余响（实测 ~1.3s）被麦克风拾回转写，内容即桃桃刚说的话——
-        与 played_text 高度相似 → 丢弃，防幽灵消息进回复/记忆。
+        与刚朗读文本高度相似 → 丢弃，防幽灵消息进回复/记忆。
+        双参考：当前在播 played_text + 最近一次已播 _last_spoken（后者跨下一次
+        speak 的 _played="" 清空仍保留，堵住串行 speak 之间的漏判竞态）。
         """
-        return echo_like(text, self.tts.played_text)
+        return echo_like(text, self.tts.played_text) or echo_like(text, self._last_spoken)
 
     def _sentence_gap(self):
         """句间监听窗口：guard 余响静默 → 打开窗口 → 关闭。
