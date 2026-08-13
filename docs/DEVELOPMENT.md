@@ -37,7 +37,7 @@
 2. **截屏在 Wayland 下走 PipeWire**（ScreenCast Portal persist_mode=2 + GStreamer 按需拉帧，`pw_capture.py`）：首次运行弹一次 GNOME 授权框，之后完全静默；回退链为 PipeWire → `gnome-screenshot`（有闪光）→ `ImageGrab`（X11）。已验证的死路：GNOME Shell 私有 Screenshot D-Bus 对第三方 `AccessDenied`；XDG Portal Screenshot 接口非交互模式也弹框。注意 venv 需 `--system-site-packages` 以使用系统 gi/GStreamer。
 3. **VAD 去 torch 化**：Silero VAD 改用 ONNX Runtime 推理，移除 torch 依赖。
 4. **UI 增加对话气泡**：LLM 回复显示在桌宠旁的气泡中，超时自动消失。
-5. **模块拆分**：按器官划分（`brain` / `vision` / `listen` / `ui`），`main.py` 只做装配。
+5. **模块拆分**：按器官划分（`brain` / `vision` / `listen` / `skin`）+ 主控中枢 `spine`，`main.py` 只做装配。
 6. **依赖管理用 uv**（`pyproject.toml` + `uv.lock`，Python 固定 3.12），**代码规范用 ruff**（lint + format，`line-length = 120`）。
 7. **音频采集用 sounddevice**，替代 pyaudio，消除编译期依赖（portaudio 头文件）；Linux 下仍需系统运行库 `libportaudio2`（wheel 不捆绑 Linux 二进制）。
 8. **回复后端可插拔，双实现由配置选择**（2026-08-10 更新，替代"不引入 AstrBot"旧结论）：
@@ -49,7 +49,7 @@
 9. **遗忘策略 = 轮次截断 + LLM 增量摘要**：超出轮次上限的老历史不硬丢，由 LLM 滚动生成摘要注入上下文（上下文 = system + facts + 摘要 + 最近 N 轮）。
 10. **长期记忆用事实表 + LLM 抽取**：`facts` 表存结构化事实（如"用户在 UESTC 读书"），抽取/去重/更新/删除全部交给 LLM 输出 JSON 操作完成，不写自研相似度去重；facts 量小，全量注入 system prompt，不做检索。
 11. **语义检索走降级路线**：优先 SQLite FTS5 关键词检索（内置、零依赖）；embedding top-k 仅列为远期候选（端点支持则用 API，否则本地小模型），不在初期目标内。
-12. **器官化架构哲学（各司其职，2026-08-11 确立）**：大模型（大脑）只输出意图、绝不碰物理硬件；器官（listen/mouth/vision）是纯物理层，不调用 LLM、不依赖 brain；主控中心（ui）监听器官信号、编排一切。硬规则与判定清单见独立指导文件 **`docs/ARCHITECTURE.md`**（开发前必读，CLAUDE.md 已挂引用）。
+12. **器官化架构哲学（各司其职，2026-08-11 确立）**：大模型（大脑）只输出意图、绝不碰物理硬件；器官（listen/mouth/vision/skin）是纯物理层，不调用 LLM、不依赖 brain；主控中心（spine，脊髓）监听器官信号、编排一切。硬规则与判定清单见独立指导文件 **`docs/ARCHITECTURE.md`**（开发前必读，CLAUDE.md 已挂引用）。
 13. **ui.py 拆分为 skin（外观器官）+ spine（主控中枢）（2026-08-13）**：ui.py 同时承担外观（贴图/气泡/输入框/动画/拖拽/双击彩蛋）与编排（器官装配/消息队列/should_reply/do_response/tool_executer/打断编排）两类职责，违反决策 12「主控中枢不堆器官实现细节」。拆为 **`skin.py`**（`Skin(QWidget)` 外观器官：广播 `text_submitted`/`touched` 信号、接受 `show_bubble`/`set_anim_state` 命令，不认 brain/LLM）+ **`spine.py`**（`Spine` 主控中枢，plain class 非 QObject → 协程槽用 `create_task` 而非 `@qasync.asyncSlot`，消费者任务在 `start()` 起，编排逻辑首次可单测）。原则：**零行为变化纯搬移**。顺带删除死状态 `on_timer_trick`（10s 定时截屏喂养无人消费的 `vision.history`）。方案与实施记录见 `docs/session/2026-08-13.md`。
 
 ## 4. 分阶段任务
@@ -74,7 +74,7 @@
 
 ### Phase 3 — 依赖瘦身与结构重构
 - [x] VAD 迁移到 onnxruntime（提前完成）：`assets/silero_vad.onnx` 本地模型 + `SileroVadOnnx` 封装，删除 torch / `torch.hub.load`，启动零下载
-- [x] 模块拆分：`main.py` 只做装配入口；`brain.py`（LLM + pack_msg + parse_tool_args）/ `vision.py`（截屏）/ `listen.py`（VAD + Whisper）/ `ui.py`（DeskFriend 窗口）
+- [x] 模块拆分：`main.py` 只做装配入口；`brain.py`（LLM + pack_msg + parse_tool_args）/ `vision.py`（截屏）/ `listen.py`（VAD + Whisper）/ `skin.py`（外观器官）/ `spine.py`（主控中枢）
 - [x] 最小测试：`tests/` 9 个用例（pack_msg、parse_tool_args 兜底、VAD 打分与状态重置），`uv run pytest` 全绿
 
 ### Phase 4 — 打磨（视情况）
@@ -86,7 +86,7 @@
 目标：解决 P10，糯糯"记得今天聊过什么"，重启不失忆。
 - [x] 新增 `memory.py`：`MemoryStore`（stdlib `sqlite3`，`pet.db`），`messages` 表（role / msg_json / turn_id / created_at），启动时加载未压缩历史
 - [x] `brain.py`：`deque(maxlen=5)` 替换为 `MemoryStore` 驱动的上下文；消息按轮次（turn_id）归组（用户文本消息开启新一轮，tool/图片消息归入当前轮），不再按条数截断
-- [x] 摘要压缩：未压缩轮次超过 `MAX_CONTEXT_TURNS`(30) 时，最老轮次经 LLM 增量更新滚动摘要（`summaries` 表单条记录），保留最近 `KEEP_RECENT_TURNS`(10) 轮；上下文组装为 system + 摘要 + 最近 N 轮；`ui.py` 在回复展示后触发，压缩失败不影响对话
+- [x] 摘要压缩：未压缩轮次超过 `MAX_CONTEXT_TURNS`(30) 时，最老轮次经 LLM 增量更新滚动摘要（`summaries` 表单条记录），保留最近 `KEEP_RECENT_TURNS`(10) 轮；上下文组装为 system + 摘要 + 最近 N 轮；`spine.py` 在回复展示后触发，压缩失败不影响对话
 - [x] 无需回复的听觉消息也落记忆：`brain.memorize()` 以"[背景谈话，无需回应]"标注独立成轮，参与上下文与压缩，但不生成回复
 - [x] 测试：`tests/test_memory.py` 14 个用例（历史落库、重启恢复、摘要触发与增量更新、base64 图片落库脱敏）
 - 验收：聊几轮后重启进程，糯糯仍能接续之前的话题
@@ -131,13 +131,13 @@
 ### 7.2 模块结构（深度解耦）
 
 ```
-ui.py ──5接口──▶ brain.py(Brain门面) ──▶ backends/{base,openai,astrbot}.py
+spine.py ──5接口──▶ brain.py(Brain门面) ──▶ backends/{base,openai,astrbot}.py
                                             │  BACKEND 配置选择
    astrbot: AstrBotBackend ──▶ onebot_bridge.py ──WS+token──▶ AstrBot
    openai:  OpenAIBackend   ──▶ openai SDK + memory.py(pet.db)
 ```
 
-- `backends/base.py`：`ReplyBackend` 抽象基类（`get_llm_response` / `get_response_with_context` / `memorize` / `maybe_compress` / `maybe_extract_facts`）+ 统一响应对象 `BackendResponse`（`content` + `tool_calls`），ui 只认契约，不认 SDK 类型
+- `backends/base.py`：`ReplyBackend` 抽象基类（`get_llm_response` / `get_response_with_context` / `memorize` / `maybe_compress` / `maybe_extract_facts`）+ 统一响应对象 `BackendResponse`（`content` + `tool_calls`），spine 只认契约，不认 SDK 类型
 - `backends/__init__.py`：`create_backend(config)` 工厂，按 `BACKEND` 键装配
 - `backends/openai.py`：旧直连 LLM 逻辑整体迁移（tools 循环、摘要压缩、事实抽取）
 - `backends/astrbot.py`：OneBot 通道对话 + 屏幕感知状态机 + `[look_at_screen]` 文本指令协议；should_reply 判定由 `LLMJudge`（judger.py）统一负责；记忆三接口为空操作
@@ -194,7 +194,7 @@ numpy 1.26 + whisper 20231117 + transformers 4.51.3 + x-transformers 2.11.24）�
 mouth.py: Mouth 器官（嘴，纯发声，2026-08-11 重构）：speak（回声门控置位/余响尾巴
            内部消化）/ interrupt / busy / speaking 门控 / finished 信号
 tts.py:   TTS 抽象 + 后端实现（SiliconFlow / CosyVoice2 / Dummy）+ 工厂（TTS_BACKEND 选择）
-ui(主控中心): show_bubble 后 mouth.speak；新消息 → mouth.interrupt() → 前缀 →
+spine(主控中心): show_bubble 后 mouth.speak；新消息 → mouth.interrupt() → 前缀 →
              brain.set_interruption（编排留在主控，嘴不依赖脑）
 listen.py: 回声门控读 mouth.speaking（耳单向只读嘴的门控状态）
 brain:  set_interruption(prefix) 门面转发
