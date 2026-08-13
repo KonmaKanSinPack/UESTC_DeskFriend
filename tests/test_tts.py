@@ -160,6 +160,17 @@ class TestSiliconFlowTTS:
         asyncio.run(tts.speak("你好"))
         assert tts.busy is False
 
+    def test_empty_sentences_early_return_no_pool(self, tmp_path, monkeypatch):
+        """纯标点/表情切句后为空 → 早退：不建线程池（防 max_workers=0 崩）、不发请求（组E #11）。"""
+        ref = tmp_path / "ref.wav"
+        __import__("soundfile").write(str(ref), [0.0] * 100, 16000)
+        tts = SiliconFlowTTS(api_key="k", voice_ref=str(ref), voice_ref_text="参考文本")
+        called = []
+        monkeypatch.setattr("httpx.post", lambda *a, **k: called.append(1))
+        asyncio.run(tts.speak("。。。！！"))  # 全标点，_split_sentences → []
+        assert called == []  # 早退，未走到请求/线程池
+        assert tts.busy is False
+
     def test_non_wav_response_no_crash(self, tmp_path, monkeypatch):
         """API 返回非 wav（错误 JSON）→ 该句失败不拖垮整段，busy 复位。"""
         ref = tmp_path / "ref.wav"

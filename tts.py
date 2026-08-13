@@ -238,6 +238,8 @@ class CosyVoice2TTS(TTS):
         import sounddevice as sd
 
         sentences = _split_sentences(text)
+        if not sentences:
+            return  # 纯标点/表情切句后为空：无可播内容，早退
         for i, sentence in enumerate(sentences, 1):
             if self._stop_event.is_set():
                 break
@@ -361,6 +363,8 @@ class SiliconFlowTTS(TTS):
         self._busy = True  # 置最后：interrupt 见 busy=True 时 _stop_event 必为本次新事件（防 stale event）
         headers = {"Authorization": f"Bearer {self.api_key}"}
         sentences = _split_sentences(text)
+        if not sentences:
+            return  # 纯标点/表情切句后为空：无可播内容，早退（防 ThreadPoolExecutor(max_workers=0) 崩）
         print(f"[TTS] 开始朗读（{len(sentences)} 句，线程 {_th.current_thread().name}）")
 
         def fetch(sentence):

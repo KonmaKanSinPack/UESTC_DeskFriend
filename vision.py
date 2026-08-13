@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import os
 import shutil
@@ -108,7 +109,9 @@ class Vision:  # AI的视觉模块
 
     async def look_at_screen(self):
         try:
-            screenshot = self.sudden_view()
+            # 截屏是阻塞 IO（PipeWire/ImageGrab/gnome-screenshot），丢线程池执行，
+            # 避免卡住 qasync 事件循环（否则会延迟耳线程 emit 的 interrupt_requested 投递）
+            screenshot = await asyncio.to_thread(self.sudden_view)
             if screenshot is None:
                 return "眼睛还没准备好（截屏后端初始化中），请稍后再让我看一次。"
             screen_base64 = pil_image_to_base64(screenshot)

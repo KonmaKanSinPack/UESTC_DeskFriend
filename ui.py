@@ -301,9 +301,9 @@ class DeskFriend(QWidget):
                 # self.message_queue.task_done()  # 和 join 成对出现。当前队列没有调用 join，暂不启用。
 
     def on_timer_trick(self):
-        # resp = self.get_response("请你调用工具看看我的屏幕")
-        # print(resp.choices[0].message.content)
-        self.vision.sudden_view()
+        # 截屏是阻塞 IO，丢线程池执行，避免每 10s 一次的定时截屏卡住 qasync 事件循环 →
+        # 延迟耳线程 emit 的 interrupt_requested 投递（#9，见 docs/session/2026-08-13.md 组E）
+        asyncio.get_event_loop().create_task(asyncio.to_thread(self.vision.sudden_view))
 
     def mouseDoubleClickEvent(self, event):  # 鼠标双击时
         if event.button() == Qt.LeftButton:
