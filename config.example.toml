@@ -28,6 +28,7 @@ SCREEN_USER_SILENCE = 120  # 距上次用户输入的最小静默（秒），用
 # ---- openai 后端（直连模式，切 BACKEND = "openai" 时使用）----
 # API_KEY = "sk-..."
 # BASE_URL = "https://api.example.com/v1"
+# OPENAI_MODEL = "gemini-2.5-pro"  # 后端模型名；本地端点（LM Studio/Ollama）必须填实际加载的模型名
 
 # 可选：自定义系统提示词（人设）。不填则使用内置的糯糯人设。
 # SYSTEM_PROMPT = "你是糯糯，一只Q版弗洛洛毛绒玩偶形态的桌面AI伙伴……"

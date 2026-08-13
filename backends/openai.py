@@ -76,10 +76,13 @@ class OpenAIBackend(ReplyBackend):
             # timeout 显式放宽：SDK 默认 connect=5s，部分网关（如 MiniMax）连接+响应 9~12s 会稳定超时
             client = AsyncOpenAI(api_key=config["API_KEY"], base_url=config["BASE_URL"], timeout=60.0, max_retries=1)
             system_prompt = config.get("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
+            # 后端模型可配：默认 gemini-2.5-pro；本地端点（LM Studio/Ollama）须填实际模型名，
+            # 否则 400 model_not_found（LM Studio 会严格校验 model 字段）
+            self.cur_model = config.get("OPENAI_MODEL", "gemini-2.5-pro")
+        else:
+            self.cur_model = "gemini-2.5-pro"
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self.client = client
-
-        self.cur_model = "gemini-2.5-pro"
         self.tools = [
             {
                 "type": "function",
