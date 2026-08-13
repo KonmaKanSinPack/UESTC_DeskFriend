@@ -239,3 +239,25 @@ class TestSentenceWindow:
         b = BackendWithHook()
         m = Mouth(tts=b)
         assert b.sentence_done_callback == m._sentence_gap  # 绑定方法用 ==（每次访问是新对象）
+
+
+class TestGapAbort:
+    """句间 gap 可被打断唤醒：interrupt 置位 _gap_abort → _sentence_gap 立即返回，
+    窗口马上关闭（停嘴不拖满 ~0.95s 窗口）。"""
+
+    def test_gap_returns_immediately_when_aborted(self, mouth):
+        mouth._gap_abort.set()
+        t0 = time.monotonic()
+        mouth._sentence_gap()
+        assert time.monotonic() - t0 < 0.1  # 不空等 guard+window(~0.95s)
+        assert mouth.window_open is False
+
+    def test_interrupt_sets_gap_abort(self, mouth):
+        asyncio.run(mouth.interrupt())
+        assert mouth._gap_abort.is_set()
+
+    def test_speak_clears_gap_abort(self, mouth):
+        """新朗读段开头清残留打断信号，否则句间窗口会被上一段的打断直接跳过。"""
+        mouth._gap_abort.set()
+        asyncio.run(mouth.speak("你好"))
+        assert not mouth._gap_abort.is_set()

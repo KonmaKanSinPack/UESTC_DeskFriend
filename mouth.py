@@ -17,7 +17,7 @@ try/finally 保证门控释放；finished 信号广播朗读结束。
 import asyncio
 import difflib
 import re
-import time
+import threading
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
@@ -63,6 +63,7 @@ class Mouth(QObject):
         self.tts = tts or create_tts(config or {})
         self.speaking = False  # 门控：朗读会话中（含尾巴）；耳据此 drop/监听
         self.window_open = False  # 句间监听窗口开：耳只在窗口期拾音
+        self._gap_abort = threading.Event()  # 打断时唤醒卡在句间 gap sleep 的后端线程（窗口立即关）
         self._last_spoken = ""  # 最近一次已播文本（is_echo 参考，跨下次 speak 的 _played="" 保留）
         self._speak_lock = asyncio.Lock()  # 串行化：连续回复按序朗读，杜绝双流叠播
         if hasattr(self.tts, "sentence_done_callback"):  # 后端支持句间钩子
@@ -79,6 +80,7 @@ class Mouth(QObject):
         if not text:
             return
         async with self._speak_lock:
+            self._gap_abort.clear()  # 新朗读段：清上一段残留的打断信号
             self.speaking = True
             try:
                 await self.tts.speak(text)
@@ -104,12 +106,14 @@ class Mouth(QObject):
         """句间监听窗口：guard 余响静默 → 打开窗口 → 关闭。
 
         由后端在每句播完后（非末句）调用，阻塞在 speak 线程 = 播放暂停；
-        窗口内被打断（stop_event 置位）→ 后端循环顶部 break，句粒度终止。
+        窗口内被打断 → interrupt() 置位 _gap_abort → 两段 wait 立即返回，
+        窗口马上关闭、后端循环顶部 break（句粒度终止），停嘴不拖满窗口。
         """
         self.window_open = False
-        time.sleep(SENTENCE_GUARD)  # 余响静默期：耳仍 drop
+        if self._gap_abort.wait(SENTENCE_GUARD):  # 余响静默期；被打断 → 不开窗、立即返回
+            return
         self.window_open = True
-        time.sleep(SENTENCE_WINDOW)  # 监听窗口：耳拾音，VAD → 打断
+        self._gap_abort.wait(SENTENCE_WINDOW)  # 监听窗口；被打断 → 立即醒（不空等满窗口）
         self.window_open = False
 
     async def interrupt(self) -> str:
@@ -117,6 +121,7 @@ class Mouth(QObject):
 
         注入对话上下文由主控中心（ui）决定，器官不依赖 brain。
         """
+        self._gap_abort.set()  # 唤醒正卡在句间 gap sleep 的后端线程（窗口立即关，停嘴不拖延）
         return await self.tts.interrupt()
 
     @property

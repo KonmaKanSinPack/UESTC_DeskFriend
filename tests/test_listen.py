@@ -51,3 +51,25 @@ class TestSegmentContaminated:
 
     def test_empty_segment_clean(self):
         assert segment_contaminated([]) is False
+
+
+class TestSpeakingSessionResetsLatches:
+    """新一段朗读（speaking False→True）→ 清打断闩/冷却，防上一段冷却抑制本段首窗。"""
+
+    def test_new_speaking_session_resets_interrupt_latches(self):
+        import types
+        from collections import deque
+
+        from listen import WINDOW_ACTIVITY_HISTORY, Listen
+
+        lis = Listen.__new__(Listen)  # 绕过 __init__（不开麦克风 / 不加载模型）；QObject 需用类自身 __new__
+        lis.mouth = types.SimpleNamespace(speaking=True, window_open=False)
+        lis._prev_speaking = False
+        lis._prev_window_open = False
+        lis._interrupt_sent = True  # 上一段遗留
+        lis._interrupt_cooldown_until = 9e9  # 上一段遗留冷却（远未到期）
+        lis._window_activity = deque([True] * 5, maxlen=WINDOW_ACTIVITY_HISTORY)
+        lis._window_tick(0.9)
+        assert lis._interrupt_sent is False
+        assert lis._interrupt_cooldown_until == 0.0
+        assert len(lis._window_activity) == 0

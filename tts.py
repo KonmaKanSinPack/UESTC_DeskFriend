@@ -230,10 +230,10 @@ class CosyVoice2TTS(TTS):
     def _speak_sync(self, text: str) -> None:
         """线程内：加载模型 + 逐句合成 + 播放（interrupt 可随时打断）。"""
         self._load()
-        self._busy = True
         self._played = ""
         self._speaking_text = text
         self._stop_event = threading.Event()
+        self._busy = True  # 置最后：interrupt 见 busy=True 时 _stop_event 必为本次新事件（防 stale event）
 
         import sounddevice as sd
 
@@ -250,6 +250,8 @@ class CosyVoice2TTS(TTS):
                 sd.wait()  # interrupt() 会 sd.stop() → wait 提前返回
                 self._playing = False
             self._played += sentence  # 该句播放完成（或被中断时已尽力播放）
+            if i == len(sentences) and not self._stop_event.is_set():
+                self._played = text  # 末句播完即定完整文本，收窄「已完成却被误报打断」竞态
             # 句间监听窗口：非末句播完调用（阻塞 = 播放暂停；窗口内被打断 → 循环顶部 break）
             if self.sentence_done_callback is not None and i < len(sentences):
                 self.sentence_done_callback()
@@ -353,10 +355,10 @@ class SiliconFlowTTS(TTS):
 
         if not self.voice_ref or not self.voice_ref_text:
             raise RuntimeError("SiliconFlow 克隆音色需要配置 TTS_VOICE_REF 与 TTS_VOICE_REF_TEXT")
-        self._busy = True
         self._played = ""
         self._speaking_text = text
         self._stop_event = threading.Event()
+        self._busy = True  # 置最后：interrupt 见 busy=True 时 _stop_event 必为本次新事件（防 stale event）
         headers = {"Authorization": f"Bearer {self.api_key}"}
         sentences = _split_sentences(text)
         print(f"[TTS] 开始朗读（{len(sentences)} 句，线程 {_th.current_thread().name}）")
@@ -417,6 +419,8 @@ class SiliconFlowTTS(TTS):
                     f"播放{t3 - t2:.2f}s 头RMS{head_rms:.3f} 尾RMS{tail_rms:.3f}{flag}"
                 )
                 self._played += sentence  # 该句播放完成（或被中断）
+                if i == len(sentences) and not self._stop_event.is_set():
+                    self._played = text  # 末句播完即定完整文本，收窄「已完成却被误报打断」竞态
                 # 句间监听窗口：非末句播完调用（阻塞 = 播放暂停；窗口内被打断 → 循环顶部 break）
                 if self.sentence_done_callback is not None and i < len(sentences):
                     self.sentence_done_callback()

@@ -101,6 +101,7 @@ class Listen(QObject):
         self._interrupt_sent = False  # 本窗口是否已发打断（防重复触发）
         self._prev_window_open = False  # 窗口开合沿检测（开窗时重置 VAD 状态）
         self._interrupt_cooldown_until = 0.0  # 打断冷却截止（monotonic）
+        self._prev_speaking = False  # 朗读会话开合沿：新朗读段清打断闩/冷却（防跨回复残留）
 
         # 音频配置参数 (VAD 要求的标准格式)
         self.SAMPLE_RATE = 16000  # 采样率：16kHz
@@ -149,19 +150,28 @@ class Listen(QObject):
         return f"监听窗口内检测到用户说话，打断朗读（{sum(self._window_activity)}/{WINDOW_ACTIVITY_HISTORY} 块活跃）"
 
     def _window_tick(self, score: float) -> None:
-        """句间监听窗口每块处理：开窗重置 VAD → 活动度累积 → 冷却 → 打断。
+        """句间监听窗口每块处理：新段清闩 → 开窗重置 VAD → 活动度累积 → 冷却 → 打断。
 
+        - 朗读会话沿（speaking False→True）：清打断闩/冷却/活动度，避免上一段的
+          冷却或 latch 残留抑制本段首个窗口（连续回复时第二段首窗打不断的根因）
         - 开窗沿：vad.reset() 丢弃播放期被回声污染的状态（voice-echo 建议，
           否则窗口期打分从脏状态开始，余响更易误判）
         - 活动度：最近 10 块 ≥8 活跃才打断；打断后 INTERRUPT_COOLDOWN 内
           不再打断（防 cancel-restart 循环，FutureAGI 指南）
         """
+        speaking = self._speaking
+        if speaking and not self._prev_speaking:
+            # 新一段朗读开始：清打断闩与冷却，避免上一段的冷却/latch 抑制本段首个窗口
+            self._interrupt_sent = False
+            self._interrupt_cooldown_until = 0.0
+            self._window_activity.clear()
+        self._prev_speaking = speaking
         window_open = self._window_open
         if window_open != self._prev_window_open:
             if window_open:
                 self.vad.reset()  # 开窗：干净状态打分
             self._prev_window_open = window_open
-        if self._speaking and window_open:
+        if speaking and window_open:
             self._window_activity.append(score >= 0.5)
             now = time.monotonic()
             if (

@@ -132,6 +132,7 @@ class TestSiliconFlowTTS:
         assert sent["json"]["references"][0]["text"] == "参考文本"
         assert sent["json"]["response_format"] == "wav"
         assert tts.busy is False
+        assert tts.played_text == "你好呀。我是桃桃。"  # 末句播完即定完整文本（组D #7）
 
     def test_playing_flag_toggles_around_play(self, tmp_path, monkeypatch):
         """playing 在 sd.play 一句时为 True、播完复位 False（耳污染判定用，区别于 busy）。"""
