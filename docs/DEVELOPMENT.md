@@ -218,6 +218,22 @@ astrbot 后端: get_llm_response 注入「[对话被打断] 你刚才说到『{p
   播完后调用 `Mouth._sentence_gap()`（阻塞 speak 线程 = 播放暂停）；耳门控一条规则
   `should_drop_echo(speaking, window_open)`。代价：播放中插嘴要等当前句读完、窗口期
   才被听到；句间插入 ~0.95s 窗口（牺牲部分句间流畅度换取确定性打断）。
+- **状态机加固（2026-08-13，research + code-review 驱动，Tier1+Tier2 共 10 条）**：
+  - **playing 标志**：TTS 后端新增 `playing`（仅 `sd.play` 一句时 True，句间窗口 / 合成期
+    False）。耳的污染判定 `segment_contaminated` 改读 `mouth.playing` 而非 `busy`——修正
+    「窗口期录音被当污染整段丢弃」（`busy` 在整个 `_speak_sync` 恒 True，而窗口期播放已暂停，
+    旧逻辑令成功插嘴的用户话永远到不了 Whisper，是打断体验坏的主因）。
+  - **answered 标志**：`BackendResponse.answered=False` 标记桥超时兜底文案「（桃桃没有回应…）」，
+    主控 `do_response` 只显示气泡不朗读——防兜底被扬声器放出 → 麦克风拾回 → 回声自回复环。
+  - **is_echo 双参考**：Mouth 在 speak 收尾快照 `_last_spoken`（跨下次 speak 的 `_played=""`
+    清空保留），`is_echo` 比对当前在播 + 最近已播，堵住串行 speak 之间的漏判竞态；余响尾巴
+    `TTS_ECHO_TAIL` 0.3→0.8s（内容兜底为权威，尾巴只减负）。
+  - **插嘴竞态**：`_stop_event` 置于 `_busy=True` 之前（防 stale event 令打断落空）；新增
+    `_gap_abort`(threading.Event) 让句间 gap 可被打断立即唤醒（停嘴不拖满 ~0.95s 窗口，
+    owner=Mouth、`interrupt()` 置位、耳不碰）；耳测 `speaking` False→True 沿清打断闩 / 冷却
+    （防上一段冷却抑制下一段首窗）；末句播完即定 `_played=text`（收窄「已完成却被误报打断」）。
+  - **事件循环不阻塞**：定时截屏 `on_timer_trick` / `vision.look_at_screen` 的阻塞 `ImageGrab`
+    丢 `asyncio.to_thread`，避免卡住 qasync 循环 → 延迟耳线程 emit 的 `interrupt_requested` 投递。
 
 ### 8.3 配置
 
