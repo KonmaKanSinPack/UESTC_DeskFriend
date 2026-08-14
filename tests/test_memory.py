@@ -3,7 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from backends.openai import MAX_FACTS, OpenAIBackend, parse_fact_ops
+from backends.judger import JUDGE_SYSTEM_PROMPT
+from backends.openai import MAX_FACTS, SUMMARY_SYSTEM_PROMPT, OpenAIBackend, parse_fact_ops
 from memory import KEEP_RECENT_TURNS, MAX_CONTEXT_TURNS, MemoryStore, render_messages, sanitize_message
 
 
@@ -173,6 +174,57 @@ class TestOpenAIBackend:
         response = asyncio.run(backend.get_llm_response("你好"))
         assert response.content == "好的"
         assert response.tool_calls == []
+
+
+class FakeJudge:
+    """判定器替身：记录收到的文本，可编排判定结果。"""
+
+    def __init__(self, result=True):
+        self.result = result
+        self.calls = []
+
+    async def should_reply(self, user_text):
+        self.calls.append(user_text)
+        return self.result
+
+
+class TestJudgeChannel:
+    """openai 后端判定通道（2026-08-14）：judge 上下文路由到独立判定器。"""
+
+    def test_judge_context_routes_to_judge(self, tmp_path):
+        """判定上下文（首条 system = JUDGE_SYSTEM_PROMPT）走独立判定器，不进主 client。"""
+        judge = FakeJudge()
+        backend = OpenAIBackend(client=_StubClient(), db_path=tmp_path / "pet.db", judge=judge)
+        context = [
+            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": "用户的消息是：你在吗"},
+        ]
+        response = asyncio.run(backend.get_response_with_context(context))
+        assert response.content == "true"
+        assert judge.calls == ["你在吗"]
+
+    def test_memory_context_bypasses_judge(self, tmp_path):
+        """记忆上下文（摘要提示词）不匹配判定通道，仍走主 client。"""
+        judge = FakeJudge()
+        stub = _StubClient()
+        backend = OpenAIBackend(client=stub, db_path=tmp_path / "pet.db", judge=judge)
+        context = [
+            {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": "已有摘要：…"},
+        ]
+        response = asyncio.run(backend.get_response_with_context(context))
+        assert response.content == "好的"
+        assert judge.calls == []
+
+    def test_judge_false_content(self, tmp_path):
+        judge = FakeJudge(result=False)
+        backend = OpenAIBackend(client=_StubClient(), db_path=tmp_path / "pet.db", judge=judge)
+        context = [
+            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": "用户的消息是：嗯嗯"},
+        ]
+        response = asyncio.run(backend.get_response_with_context(context))
+        assert response.content == "false"
 
 
 class TestFacts:

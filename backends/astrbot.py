@@ -15,6 +15,7 @@ import re
 from onebot_bridge import OneBotBridge, current_loop
 
 from .base import BackendResponse, ReplyBackend
+from .judger import _extract_judge_text
 
 # 屏幕关键词：消息文本命中即本地截屏，附图一起发给桃桃（桃桃多模态看图）
 SCREEN_KEYWORDS = ("屏幕", "截图", "看看", "桌面")
@@ -52,24 +53,6 @@ def clean_markdown(text):
     t = re.sub(r"`([^`]+)`", r"\1", t)  # `行内代码`
     t = re.sub(r"(?m)^#{1,6}\s*", "", t)  # # 标题
     return t.strip()
-
-
-def _extract_judge_text(context):
-    """从 ui.should_reply 构造的 judge context 提取用户消息原文。
-
-    ui 固定用 "用户的消息是：{message}" 包装，剥离前缀后再交给决策器，
-    否则纯语气词（"嗯嗯"）带着前缀会让判定失真。
-    """
-    text = ""
-    if context:
-        last = context[-1]
-        content = last.get("content") if isinstance(last, dict) else ""
-        if isinstance(content, str):
-            text = content
-            prefix = "用户的消息是："
-            if text.startswith(prefix):
-                text = text[len(prefix) :]
-    return text
 
 
 def phash(img, size=16):

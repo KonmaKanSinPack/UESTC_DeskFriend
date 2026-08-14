@@ -11,15 +11,16 @@ from .judger import LLMJudge
 
 
 def create_judge(config):
-    """构建 LLM 决策器（should_reply 判定，astrbot 后端用）。
+    """构建 LLM 决策器（should_reply 判定，astrbot/openai 双后端共用）。
 
-    复用 openai 后端的 API_KEY/BASE_URL；模型用 JUDGE_MODEL（不填则默认模型）。
-    API_KEY 缺失时返回 None（后端会回退"默认回复"）。
+    - 端点：JUDGE_URL 优先（独立/本地端点，如 LM Studio/Ollama），缺则回退 BASE_URL（旧行为）
+    - 模型：JUDGE_MODEL（不填则默认 gemini-2.5-pro）
+    - API_KEY 或端点缺失时返回 None（astrbot 回退默认回复；openai 回退主 client 判定）
     """
     api_key = config.get("API_KEY")
-    base_url = config.get("BASE_URL")
+    base_url = config.get("JUDGE_URL") or config.get("BASE_URL")
     if not api_key or not base_url:
-        print("判定器未配置：config.toml 缺少 API_KEY/BASE_URL（openai 段），判定回退为默认回复")
+        print("判定器未配置：config.toml 缺少 API_KEY/JUDGE_URL（或 BASE_URL），判定回退为默认回复")
         return None
     try:
         # 懒加载：judger 本身零依赖，client 按需构建；缺 openai SDK 时优雅降级

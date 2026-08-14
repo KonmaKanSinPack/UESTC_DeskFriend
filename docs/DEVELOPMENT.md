@@ -149,8 +149,8 @@ spine.py ──5接口──▶ brain.py(Brain门面) ──▶ backends/{base,o
 - **屏幕感知状态机**（事件驱动 + 变化门控 + 冷却）：idle 60s / active 20s 截屏 → 16×16 感知哈希 diff → 变化幅度超阈值 且 冷却期过 且 不在对话中 且 用户静默期过，才发桃桃"主动观察"消息；回复"无"类则静默丢弃，有内容则主动冒泡（`reply_sink` 回调）
 - **`[look_at_screen]` 协议**：桃桃回复含此标记 → 桌宠本地截屏 → 附图追问（≤3 轮）→ 显示最终回复；作为"LLM 主动调工具看屏幕"的轻量实现（MCP 为阶段四候选）
 - **should_reply 判定（2026-08-10 起统一走 LLM 决策器）**：废弃本地关键词规则（漏判严重，且提示词与实现分离）。`backends/judger.py` 的 `LLMJudge`（few-shot 提示词 + "不确定输出 true"）统一判定：
-  - openai 后端走通用 LLM 通道（context 里的共享提示词）
-  - astrbot 后端由桌宠侧自调 LLM（复用 `API_KEY`/`BASE_URL` + `JUDGE_MODEL` 配置），判定**不进 AstrBot 对话流**，不污染桃桃记忆
+  - openai 后端（2026-08-14 起）：判定上下文（首条 system = JUDGE_SYSTEM_PROMPT）路由到独立判定器（`JUDGE_URL` 优先 / `BASE_URL` 回退 + `JUDGE_MODEL`），不进主对话流、不占主模型额度；未配置判定器 → 回退主 client 判定（旧行为）
+  - astrbot 后端由桌宠侧自调 LLM（同 create_judge 配置），判定**不进 AstrBot 对话流**，不污染桃桃记忆
   - 判定器未配置 / 调用失败 → 回退默认回复（宁可多回，不可漏听）
 
 ### 7.4 AstrBot 侧依赖（2026-08-10 已实测联调成功）

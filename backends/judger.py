@@ -55,3 +55,22 @@ class LLMJudge:
         except Exception as e:
             print(f"判定器调用失败：{e}；默认回复（宁可多回不可漏听）")
             return True
+
+
+def _extract_judge_text(context):
+    """从 spine.should_reply 构造的 judge context 提取用户消息原文。
+
+    spine 固定用 "用户的消息是：{message}" 包装，剥离前缀后再交给决策器，
+    否则纯语气词（"嗯嗯"）带着前缀会让判定失真。
+    （原住 backends/astrbot.py，2026-08-14 移到共享模块：openai 后端的判定通道也要用）
+    """
+    text = ""
+    if context:
+        last = context[-1]
+        content = last.get("content") if isinstance(last, dict) else ""
+        if isinstance(content, str):
+            text = content
+            prefix = "用户的消息是："
+            if text.startswith(prefix):
+                text = text[len(prefix) :]
+    return text

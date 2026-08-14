@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 from memory import KEEP_RECENT_TURNS, MAX_CONTEXT_TURNS, MemoryStore, render_messages
 
 from .base import BackendResponse, ReplyBackend, ToolCall
+from .judger import JUDGE_SYSTEM_PROMPT, _extract_judge_text
 
 # 默认人设：糯糯（Q版弗洛洛毛绒玩偶）。可在 config.toml 用 SYSTEM_PROMPT 覆盖。
 DEFAULT_SYSTEM_PROMPT = (
@@ -68,8 +69,8 @@ def parse_fact_ops(raw):
 class OpenAIBackend(ReplyBackend):
     name = "openai"
 
-    def __init__(self, client=None, db_path=None, system_prompt=None):
-        """client / db_path / system_prompt 可注入，仅供测试；生产路径从 config.toml 构建。"""
+    def __init__(self, client=None, db_path=None, system_prompt=None, judge=None):
+        """client / db_path / system_prompt / judge 可注入，仅供测试；生产路径从 config.toml 构建。"""
         if client is None:
             with open("config.toml", "rb") as f:
                 config = tomllib.load(f)
@@ -79,8 +80,16 @@ class OpenAIBackend(ReplyBackend):
             # 后端模型可配：默认 gemini-2.5-pro；本地端点（LM Studio/Ollama）须填实际模型名，
             # 否则 400 model_not_found（LM Studio 会严格校验 model 字段）
             self.cur_model = config.get("OPENAI_MODEL", "gemini-2.5-pro")
+            # 判定器独立通道：JUDGE_URL/JUDGE_MODEL 配置时，should_reply 走独立/本地模型，
+            # 不占主模型额度；未配置（create_judge 返回 None）→ 判定回退主 client（旧行为）。
+            # 惰性导入：本模块由 create_backend 分支加载，彼时 create_judge 已定义
+            from . import create_judge
+
+            self.judge = create_judge(config) if judge is None else judge
         else:
             self.cur_model = "gemini-2.5-pro"
+            self.judge = judge
+        print(f"当前模型为：{self.cur_model}")
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self.client = client
         self.tools = [
@@ -163,6 +172,12 @@ class OpenAIBackend(ReplyBackend):
         return self._to_backend_response(response)
 
     async def get_response_with_context(self, context, model=None, use_tools=False):
+        if self.judge is not None and context and context[0].get("content") == JUDGE_SYSTEM_PROMPT:
+            # should_reply 判定通道：上下文首条 system 即 JUDGE_SYSTEM_PROMPT（spine 构造，
+            # 单一来源）→ 走独立判定器，不进主对话流、不占主模型额度；
+            # 记忆系统（摘要/事实/合并）上下文各有自己的提示词，不在此匹配，仍走主 client
+            reply = await self.judge.should_reply(_extract_judge_text(context))
+            return BackendResponse(content="true" if reply else "false")
         if model is None:
             model = self.cur_model
         kwargs = {}

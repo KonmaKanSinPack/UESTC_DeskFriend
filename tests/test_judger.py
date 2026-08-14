@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from backends.judger import JUDGE_SYSTEM_PROMPT, LLMJudge
+from backends.judger import JUDGE_SYSTEM_PROMPT, LLMJudge, _extract_judge_text
 
 
 class _StubClient:
@@ -75,3 +75,21 @@ def test_max_tokens_room_for_reasoning():
     judge = LLMJudge(client=client, model="m1")
     asyncio.run(judge.should_reply("在吗"))
     assert client.last_kwargs["max_tokens"] >= 100
+
+
+def test_extract_judge_text_strips_prefix():
+    """剥掉 spine 固定的"用户的消息是："包装，纯语气词才不会带前缀失真。"""
+    context = [
+        {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+        {"role": "user", "content": "用户的消息是：你在吗"},
+    ]
+    assert _extract_judge_text(context) == "你在吗"
+
+
+def test_extract_judge_text_no_prefix_passthrough():
+    assert _extract_judge_text([{"role": "user", "content": "嗯嗯"}]) == "嗯嗯"
+
+
+def test_extract_judge_text_empty_context():
+    assert _extract_judge_text([]) == ""
+    assert _extract_judge_text(None) == ""
