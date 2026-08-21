@@ -1,0 +1,70 @@
+# 全局技术文档 —— UESTC_DeskFriend 是怎么运转的
+
+> 面向人的全局视角。接口签名等精确规格以 `docs_agent/technical.md` 为权威,
+> 本文负责让你**读懂**这个项目。
+
+## 一页纸
+
+**是什么**:PyQt5 桌面宠物,常驻屏幕角落。能听(语音识别)、能看(截屏理解)、
+能说(TTS 语音合成 + 气泡)、能记( SQLite 记忆)。Python 3.12 + uv 管理,165 个单测。
+
+**怎么跑**:`uv run main.py`(配置见 `config.example.toml`,复制为 `config.toml` 填 key)。
+
+**一个回合的生命周期**:
+
+```
+你说话 → 耳朵(VAD 检测语音→Whisper 转写文字)
+       → 脊髓(小模型判定"需要回应吗?")
+           ├─ 不需要 → 只落记忆(背景谈话),安静
+           └─ 需要 → 大脑(AstrBot 桃桃 / 直连 LLM)生成回复
+                    → 皮肤显示气泡 + 嘴逐句朗读
+朗读中你插嘴 → 句间监听窗捕获 → 停嘴、记下打断位置、进入新回合
+```
+
+## 分层:脑 / 脊髓 / 器官
+
+| 层 | 文件 | 一句话职责 |
+|---|---|---|
+| 大脑 | `brain.py` + `backends/` | 只输出意图:回复文本或"想看屏幕"的工具调用 |
+| 脊髓 | `spine.py` | 唯一编排者:接器官信号、判定门卫、命令器官 |
+| 器官 | `listen/mouth/vision/skin` | 纯物理层:采集/播放/显示,互相不认识,只广播信号 |
+
+细节规则(代码归属判定、反模式清单)见 `docs_agent/ARCHITECTURE.md`。
+
+## 关键设计决策(为什么)
+
+**1. 脑子可插拔。** `backends/` 抽象出统一契约,`BACKEND` 配置一键切换:
+默认 `astrbot`(伪装成 OneBot 客户端反向连 AstrBot,人格记忆由它管),
+或 `openai`(直连接口+自建记忆)。判定"要不要回应"固定走独立小模型(本地
+LM Studio 等),不进对话流——省钱、快、不污染记忆。
+
+**2. OneBot 伪装通道。** 桌宠伪装成 NapCat 式的 OneBot 实现,反向 WebSocket
+连 AstrBot。握手必须带三个头(Bearer token / X-Client-Role: universal / X-Self-ID),
+缺一个就 400/401——这是实测踩出来的,详见 `docs_agent/DEVELOPMENT.md` §7.4。
+
+**3. 半双工打断。** 不做回声消除(AEC 真机不稳),改为"句间窗口":
+播放中麦克风只丢弃,句与句之间开 0.6 秒监听窗,窗口内听到人声 = 插嘴。
+配套三道保险:回声内容比对(防止把自己的余响当插嘴)、播放中标志(防止窗口期
+录音被误丢)、兜底文案不发声(防止"没有回应"提示被麦克风拾回造成自言自语循环)。
+
+**4. 记忆三件套。** 轮次化短期记忆(不掐条数)→ 超 30 轮滚动摘要(保最近 10 轮)
+→ 事实表(名字/学校/约定,LLM 增量维护,全量注入)。全部故障吞异常只打日志,
+记忆坏了对话照常。
+
+**5. Wayland 截屏的血泪史(仅 Linux)。** ImageGrab 失效→GNOME 私有接口被拒→
+Portal 截图弹窗→gnome-screenshot 闪光→最终 ScreenCast Portal + PipeWire + GStreamer,
+授权一次永久静默。Windows 下原生 ImageGrab 直接可用,整段历史只留在回退链里。
+
+## 踩坑精华(完整版见 docs_agent/dev-journey.md)
+
+- Silero VAD v5 模型要求每块输入前拼上 64 点历史上下文,漏了就恒输出 0.001
+- LLM 结构化输出必须校验后落库;tool 消息必须紧跟 tool_calls,顺序错就 400
+- 判定类 LLM 调用不能带 tools,否则模型"用行动代替回答"
+- "已缓存"≠"离线可用":HF 系库默认联网校验,`local_files_only` 是好朋友
+- 桌面应用 Ctrl+C 要靠 SIG_DFL,Qt 事件循环不把执行权还给 Python
+
+## 想深入?
+
+- 怎么开发/贡献:`README.md` + `docs_agent/DEVELOPMENT.md`
+- 每个决策的来龙去脉:`docs_agent/dev-journey.md`(魔改历程)
+- 历史轮次实录:`docs_agent/session/`(按日期)
