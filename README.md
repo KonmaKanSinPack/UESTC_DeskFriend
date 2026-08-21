@@ -165,7 +165,8 @@ spine.py       # 主控中枢（脊髓）：器官装配、消息队列、判定
 pw_capture.py  # Wayland 静默截屏后端（ScreenCast Portal + PipeWire + GStreamer）
 assets/        # 贴图 + VAD 模型 + 音色参考音频
 tests/         # pytest 用例
-docs/          # 开发文档：DEVELOPMENT.md（技术决策）、dev-journey.md（魔改历程）、session/（每日日志）
+docs_agent/    # agent 层文档：RULES（工作方式）、ARCHITECTURE（架构硬规则）、DEVELOPMENT、technical、PROGRESS、session/
+docs_human/    # 人类可读层：design（设计愿景）、overall（全局技术文档）
 ```
 
 ## 开发

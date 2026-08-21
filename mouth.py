@@ -84,7 +84,7 @@ class Mouth(QObject):
             # speaking 置位覆盖「合成期 + 播放 + 余响尾巴」全段。合成期（SiliconFlow ~1~2s）
             # 耳被门控丢弃 = 有意为之：此期防止复捕用户刚说完、尚未散去的话尾（那句已触发
             # 本回复）；生产后端合成短，代价可接受。CosyVoice2 加载 10~20s 属未完成后端非
-            # 生产路径（#10，见 docs/session/2026-08-13.md 组E）
+            # 生产路径（#10，见 docs_agent/session/2026-08-13.md 组E）
             self.speaking = True
             try:
                 await self.tts.speak(text)

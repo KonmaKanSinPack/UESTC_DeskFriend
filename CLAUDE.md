@@ -1,10 +1,10 @@
 # UESTC_DeskFriend 工作规范
 
-## 设计原则（各司其职，详见 docs/ARCHITECTURE.md）
+## 设计原则（各司其职，详见 docs_agent/ARCHITECTURE.md）
 
 - 大模型（大脑）只输出意图，绝不碰物理硬件；器官（listen/mouth/vision/skin）是纯物理层，
   绝不调用 LLM / 不依赖 brain；主控中心（spine，脊髓）监听器官信号、编排一切
-- 写任何新代码前先按 docs/ARCHITECTURE.md §四「代码归属判定」确定代码属于哪层
+- 写任何新代码前先按 docs_agent/ARCHITECTURE.md §四「代码归属判定」确定代码属于哪层
 - 器官间只允许单向只读依赖（如耳读嘴的 speaking 门控）；事件走信号广播
 - 评审/收尾时对照 ARCHITECTURE.md §七「评审检查清单」
 
@@ -12,11 +12,11 @@
 
 ### 开工前
 
-1. 先读 docs/DEVELOPMENT.md、docs/dev-journey.md、docs/session/ 下最近日志，
+1. 先读 docs_agent/DEVELOPMENT.md、docs_agent/dev-journey.md、docs_agent/session/ 下最近日志，
    掌握项目现状、技术决策、历史改动原因
 2. 针对本次需求，先给出【设计思路】+ 简单核心实现片段（接口签名 + 关键逻辑），
    禁止直接写码；与我 brainstorm，确定开工方案后才继续
-3. 把确认后的方案写成 plan+spec 到 docs/session/YYYY-MM-DD.md：
+3. 把确认后的方案写成 plan+spec 到 docs_agent/session/YYYY-MM-DD.md：
    - 任务分解 + 涉及文件清单
    - 关键接口/数据结构设计 + 核心代码片段（带注释说明思路）
 
@@ -24,7 +24,7 @@
 
 4. 严格按确认的方案执行；出现方案未覆盖的情况，先暂停问我
 5. 若实现偏离 spec（设计缺陷、需求变化、与我讨论后改方案）：
-   先同步更新 docs/DEVELOPMENT.md 对应章节，再继续写码
+   先同步更新 docs_agent/DEVELOPMENT.md 对应章节，再继续写码
 
 ### 收尾（硬性门禁，全过才算本轮完成）
 

@@ -1,7 +1,7 @@
 """脊髓（spine）主控中枢：纯编排，不碰任何 widget。
 
 职责：装配器官、监听器官信号（广播）→ should_reply 门卫 → 编排回复 → 命令器官。
-器官不知道大模型存在，spine 不知道外观细节——各司其职（docs/ARCHITECTURE.md）。
+器官不知道大模型存在，spine 不知道外观细节——各司其职（docs_agent/ARCHITECTURE.md）。
 
 跨线程说明：PyQt5 信号对非 QObject 接收者同样经主线程事件循环投递（已用探针验证，
 2026-08-13），所以 spine 的槽即使在耳线程 emit，也会在主线程执行——create_task
@@ -73,7 +73,7 @@ class Spine:
         self.face.set_anim_state("talking")
         self.face.show_bubble(response.content)
         # 桥超时/断线兜底（answered=False）：气泡给反馈，但不朗读——否则兜底文案被
-        # 扬声器放出→麦克风拾回→回声自回复环（详见 docs/session/2026-08-13.md 组B）
+        # 扬声器放出→麦克风拾回→回声自回复环（详见 docs_agent/session/2026-08-13.md 组B）
         if not response.answered:
             return
         # 朗读回复（异步不阻塞对话队列；门控置位/尾巴释放由 Mouth 内部消化）
