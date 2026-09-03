@@ -61,7 +61,7 @@ class BackendResponse:
 | 耳 listen | `listen.mouth = mouth`（单向只读注入） | `text_signal(str)`、`interrupt_requested` |
 | 嘴 mouth | `async speak(text)`、`async interrupt() -> 前缀`、`async stop()`（退出收尾） | `busy` / `speaking` / `playing` / `window_open`、`finished` |
 | 眼 vision | `look_at_screen()`（内部多后端回退） | — |
-| 皮 skin | `show_bubble(text, timeout_ms)` / `hide_bubble()` / `set_anim_state(state)` | `text_submitted(str)`、`touched`、`quit_requested` |
+| 皮 skin | `show_bubble(text, timeout_ms)` / `hide_bubble()` / `set_anim_state(state)` / `set_pending(bool)`（生成中三点指示，2026-09-03） | `text_submitted(str)`、`touched`、`quit_requested` |
 
 - **ASR 引擎**（2026-09-03，asr.py）：`ASR.transcribe(audio_f32, sample_rate) -> str`
   （同步，跑耳线程）。`create_asr(config)` 按 `ASR_BACKEND` 装配：`sensevoice`
