@@ -39,8 +39,7 @@ PROACTIVE_MARKER = "（桌宠主动观察）"
 # 主动观察消息文案：明确告诉桃桃可以只回「无」；含"屏幕/截图"关键词，
 # 走 get_llm_response 时 SCREEN_KEYWORDS 路径会自动截屏附图
 PROACTIVE_OBSERVE_TEXT = (
-    PROACTIVE_MARKER
-    + "屏幕内容有新变化，请看截图。"
+    PROACTIVE_MARKER + "屏幕内容有新变化，请看截图。"
     "如果没有什么值得主动对主人说的话，只回复「无」；"
     "如果有值得说的（发现有趣的事、重要信息或需要提醒的事），就说出来。"
 )

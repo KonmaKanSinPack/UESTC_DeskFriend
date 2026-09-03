@@ -3,7 +3,7 @@
 import asyncio
 
 from backends.base import BackendResponse
-from spine import Spine
+from spine import PROACTIVE_SOURCE, USER_SOURCE, Spine, group_pending
 
 
 class StubSignal:
@@ -54,7 +54,7 @@ class FakeBrain:
     """脑替身：可编排判定结果/回复内容/异常。"""
 
     def __init__(self):
-        self.reply_sink = None
+        self.observe_sink = None
         self.should_reply_result = "true"
         self.response = BackendResponse(content="你好呀")
         self.raise_on_reply = False
@@ -137,8 +137,8 @@ def test_consumer_merges_backlog_and_replies():
     async def scenario():
         spine, face, brain, mouth = make_spine()
         spine.start()
-        await spine.message_queue.put("消息A")
-        await spine.message_queue.put("消息B")
+        await spine.message_queue.put((USER_SOURCE, "消息A"))
+        await spine.message_queue.put((USER_SOURCE, "消息B"))
         await asyncio.sleep(0.05)
         assert brain.replies == ["消息A\n消息B"]
         assert ("你好呀", 10000) in face.bubbles
@@ -156,7 +156,7 @@ def test_should_reply_false_memorizes_and_hides():
         brain.should_reply_result = "false"
         spine, face, _, _ = make_spine(brain=brain)
         spine.start()
-        await spine.message_queue.put("背景谈话")
+        await spine.message_queue.put((USER_SOURCE, "背景谈话"))
         await asyncio.sleep(0.05)
         assert brain.memorized == ["背景谈话"]
         assert face.hide_count == 1
@@ -173,7 +173,7 @@ def test_answered_false_shows_bubble_without_speak():
         brain.response = BackendResponse(content="（桃桃没有回应…）", answered=False)
         spine, face, _, mouth = make_spine(brain=brain)
         spine.start()
-        await spine.message_queue.put("你在吗")
+        await spine.message_queue.put((USER_SOURCE, "你在吗"))
         await asyncio.sleep(0.05)
         assert ("（桃桃没有回应…）", 10000) in face.bubbles
         assert mouth.speaks == []
@@ -191,7 +191,7 @@ def test_do_response_error_releases_busy_and_hides():
         brain.raise_on_reply = True
         spine, face, _, _ = make_spine(brain=brain)
         spine.start()
-        await spine.message_queue.put("触发异常")
+        await spine.message_queue.put((USER_SOURCE, "触发异常"))
         await asyncio.sleep(0.05)
         assert face.hide_count == 1
         assert spine.is_busy is False
@@ -239,7 +239,7 @@ def test_queue_full_drops_gracefully():
 
     spine, _, _, _ = make_spine()  # 不起 start：无消费者，队列不被取走
     for i in range(20):
-        spine.message_queue.put_nowait(f"m{i}")
+        spine.message_queue.put_nowait((USER_SOURCE, f"m{i}"))
     spine._on_text_submitted("溢出消息")
     assert spine.message_queue.qsize() == 20
 
@@ -257,6 +257,99 @@ def test_echo_text_dropped():
         assert face.bubbles == []
 
     asyncio.run(scenario())
+
+
+# ---------- 主动观察统一流（2026-09-03） ----------
+
+
+def test_group_pending_merges_user_only():
+    """积压分流：连续 user 合并（语音碎片语义），proactive 独立不与用户话音拼接。"""
+    pending = [
+        (USER_SOURCE, "a"),
+        (USER_SOURCE, "b"),
+        (PROACTIVE_SOURCE, "observe"),
+        (USER_SOURCE, "c"),
+        (PROACTIVE_SOURCE, "observe2"),
+    ]
+    assert group_pending(pending) == [
+        (USER_SOURCE, "a\nb"),
+        (PROACTIVE_SOURCE, "observe"),
+        (USER_SOURCE, "c"),
+        (PROACTIVE_SOURCE, "observe2"),
+    ]
+
+
+def test_proactive_skips_should_reply():
+    """proactive 源跳过判定器（要不要观察已由后端门控决策），直接生成回复。"""
+
+    async def scenario():
+        brain = FakeBrain()
+        brain.should_reply_result = "false"  # 即使判定器说不回，主动观察仍要走 do_response
+        spine, _, _, _ = make_spine(brain=brain)
+        spine.start()
+        await spine.message_queue.put((PROACTIVE_SOURCE, "（桌宠主动观察）…"))
+        await asyncio.sleep(0.05)
+        assert brain.replies == ["（桌宠主动观察）…"]
+        assert brain.memorized == []  # 不走 memorize 分支
+
+    asyncio.run(scenario())
+
+
+def test_mixed_backlog_user_merged_proactive_separate():
+    """混合积压：user 各自成条（被 proactive 隔开不误拼）、proactive 独立，按序处理。"""
+
+    async def scenario():
+        spine, _, brain, _ = make_spine()
+        spine.start()
+        await spine.message_queue.put((USER_SOURCE, "消息A"))
+        await spine.message_queue.put((PROACTIVE_SOURCE, "观察"))
+        await spine.message_queue.put((USER_SOURCE, "消息B"))
+        await asyncio.sleep(0.05)
+        assert brain.replies == ["消息A", "观察", "消息B"]
+
+    asyncio.run(scenario())
+
+
+def test_empty_content_fully_silent():
+    """主动观察"无话可说"（content=""）：不气泡、不动画、不朗读。"""
+
+    async def scenario():
+        brain = FakeBrain()
+        brain.response = BackendResponse(content="")
+        spine, face, _, mouth = make_spine(brain=brain)
+        spine.start()
+        await spine.message_queue.put((PROACTIVE_SOURCE, "观察"))
+        await asyncio.sleep(0.05)
+        assert face.bubbles == []
+        assert face.anim_states == []
+        assert mouth.speaks == []
+
+    asyncio.run(scenario())
+
+
+def test_speak_false_bubbles_without_speaking():
+    """speak=False（主动观察空闲期）：气泡+动画照常，但不朗读。"""
+
+    async def scenario():
+        brain = FakeBrain()
+        brain.response = BackendResponse(content="主动观察的话", speak=False)
+        spine, face, _, mouth = make_spine(brain=brain)
+        spine.start()
+        await spine.message_queue.put((PROACTIVE_SOURCE, "观察"))
+        await asyncio.sleep(0.05)
+        assert ("主动观察的话", 10000) in face.bubbles
+        assert "talking" in face.anim_states
+        assert mouth.speaks == []
+
+    asyncio.run(scenario())
+
+
+def test_observe_sink_wired_to_proactive_queue():
+    """接线：brain.observe_sink 挂到入队入口，提交的文案以 proactive 源入队。"""
+    spine, _, _, _ = make_spine()  # 不起 start：直接检查队列内容
+    assert spine.brain.observe_sink == spine._on_proactive_observe  # bound method 按值比较（is 每次取到新对象）
+    spine.brain.observe_sink("（桌宠主动观察）看屏幕")
+    assert spine.message_queue.get_nowait() == (PROACTIVE_SOURCE, "（桌宠主动观察）看屏幕")
 
 
 # ---------- 退出编排 ----------

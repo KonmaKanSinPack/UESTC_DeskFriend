@@ -17,6 +17,28 @@ from mouth import Mouth
 from skin import Skin, load_config
 from vision import Vision
 
+# 消息来源标记：队列元素 (source, text) 的 source 值。
+# user = 耳/皮/彩蛋等用户输入；proactive = astrbot 后端主动观察（自发，
+# 2026-09-03 起入统一消息流：与用户消息同一队列/同一呈现路径，仅分流不合并）
+USER_SOURCE = "user"
+PROACTIVE_SOURCE = "proactive"
+
+
+def group_pending(pending):
+    """积压分流：连续的 user 源合并成一条（语音碎片语义），proactive 源独立成条。
+
+    防污染：主动观察是桌宠自发内容，与用户话音 "\\n" 拼接会让桃桃困惑；
+    分流后两者在同一队列串行（天然互斥，替代旧的 bridge.busy 防打架）但互不合并。
+    纯函数便于单测。
+    """
+    grouped = []
+    for source, text in pending:
+        if source == USER_SOURCE and grouped and grouped[-1][0] == USER_SOURCE:
+            grouped[-1] = (USER_SOURCE, grouped[-1][1] + "\n" + text)
+        else:
+            grouped.append((source, text))
+    return grouped
+
 
 class Spine:
     """主控中枢：器官装配 + 消息队列 + 判定 + 回复编排 + 打断编排。
@@ -43,8 +65,9 @@ class Spine:
         self.face.text_submitted.connect(self._on_text_submitted)
         self.face.touched.connect(self._on_touched)
         self.face.quit_requested.connect(self._on_quit_requested)  # 托盘/右键「退出」
-        # 主动冒泡回调：astrbot 后端（屏幕感知）发现值得说的话时直接显示气泡
-        self.brain.reply_sink = self._on_proactive_bubble
+        # 主动观察提交（astrbot 屏幕感知门控通过）：proactive 源入统一队列，
+        # 响应与用户消息走同一条 do_response（2026-09-03 起替代 reply_sink 冒泡旁路）
+        self.brain.observe_sink = self._on_proactive_observe
 
         # 自锁
         self.is_busy = False
@@ -105,6 +128,11 @@ class Spine:
             # 第二次通信：带着结果回去要最终回复
             response = await self.brain.get_llm_response(msgs)
 
+        if not response.content:
+            # 主动观察"无话可说"（astrbot 后端对"无"类回复返回空串）：完全静默——
+            # 不气泡不朗读。用户消息永不返回空（astrbot 有兜底文案/openai 正常有内容）
+            return
+
         print(response.content)
         self.face.set_anim_state("talking")
         self.face.show_bubble(response.content)
@@ -112,8 +140,11 @@ class Spine:
         # 扬声器放出→麦克风拾回→回声自回复环（详见 docs_agent/session/2026-08-13.md 组B）
         if not response.answered:
             return
-        # 朗读回复（异步不阻塞对话队列；门控置位/尾巴释放由 Mouth 内部消化）
-        asyncio.get_event_loop().create_task(self.mouth.speak(response.content))
+        # 朗读回复（异步不阻塞对话队列；门控置位/尾巴释放由 Mouth 内部消化）。
+        # speak=False：主动观察空闲期（用户 2 分钟内未交互）只冒泡不朗读——
+        # 打扰门控由后端时间窗判定（BackendResponse.speak），呈现代码单一路径只多这一个条件
+        if response.speak:
+            asyncio.get_event_loop().create_task(self.mouth.speak(response.content))
         # 回复已展示，再后台做记忆压缩（超限时把最老轮次并入摘要，失败不影响对话）
         await self.brain.maybe_compress()
         # 批量抽取自上次以来的事实（含此前攒下的背景谈话，失败不影响对话）
@@ -177,7 +208,7 @@ class Spine:
             return
         self._interrupt_tts()  # 打断朗读，记录打断位置
         try:
-            self.message_queue.put_nowait(text)  # 忙碌时也入队，等消费者空闲后处理
+            self.message_queue.put_nowait((USER_SOURCE, text))  # 忙碌时也入队，等消费者空闲后处理
             self.face.show_bubble("听到了，正在想…", timeout_ms=60000)
             self.face.set_anim_state("thinking")
         except asyncio.QueueFull:
@@ -188,7 +219,7 @@ class Spine:
         print(f"接收到文字消息：{text}")
         self._interrupt_tts()  # 打断朗读，记录打断位置
         try:
-            self.message_queue.put_nowait(text)
+            self.message_queue.put_nowait((USER_SOURCE, text))
             self.face.show_bubble("听到了，正在想…", timeout_ms=60000)
             self.face.set_anim_state("thinking")
         except asyncio.QueueFull:
@@ -198,40 +229,47 @@ class Spine:
         """皮信号入口：双击"触碰"彩蛋 → 入队。"""
         print("接收到鼠标触碰事件")
         try:
-            self.message_queue.put_nowait("用户用鼠标触碰了你")
+            self.message_queue.put_nowait((USER_SOURCE, "用户用鼠标触碰了你"))
         except asyncio.QueueFull:
             print("消息队列已满，丢弃这条消息。")
 
-    def _on_proactive_bubble(self, text):
-        """主动冒泡（astrbot 屏幕感知）：只显示气泡，不改动画状态。"""
-        self.face.show_bubble(text)
+    def _on_proactive_observe(self, text):
+        """observe_sink 入口（astrbot 屏幕感知门控通过）：proactive 源入统一队列。
+
+        与用户消息同一队列串行（天然互斥）；受理不打"正在想"气泡——自发观察
+        在桃桃给出值得说的话之前对用户零打扰。
+        """
+        print("接收到主动观察提交")
+        try:
+            self.message_queue.put_nowait((PROACTIVE_SOURCE, text))
+        except asyncio.QueueFull:
+            print("消息队列已满，丢弃这次主动观察。")
 
     # ---------- 消费者（生产者-消费者结构） ----------
 
     async def on_received_message_consumer(self):
         while True:
-            message = await self.message_queue.get()  # 当队列为空时就会永远停留在这一行
-            # 把忙碌期间积压的消息一并取出合并（多为连续的语音片段）
-            pending = [message]
+            pending = [await self.message_queue.get()]  # 队列空时停留在这行
             while not self.message_queue.empty():
                 pending.append(self.message_queue.get_nowait())
-            if len(pending) > 1:
-                message = "\n".join(pending)
-                print(f"合并了 {len(pending)} 条积压消息")
-            self.is_busy = True
-            try:
-                print(f"正在处理消息：{message}")
-                if await self.should_reply(message):
-                    print("判断需要回复，正在处理消息...")
-                    await self.do_response(message)
-                else:
-                    print("判断不需要回复，仅记入记忆。")
-                    self.brain.memorize(message)  # 背景谈话只记不答
-                    await self.brain.maybe_compress()  # 跳过回复的消息也要参与压缩
+            # 分流后逐条处理：连续 user 合并（语音碎片），proactive 独立成条
+            for source, message in group_pending(pending):
+                self.is_busy = True
+                try:
+                    print(f"正在处理消息（{source}）：{message}")
+                    # proactive 源跳过判定器：要不要观察已由后端四重门控决策，
+                    # 判定器（should_reply）回答的是"用户这句话值不值得回"，语义不同
+                    if source == PROACTIVE_SOURCE or await self.should_reply(message):
+                        print("判断需要回复，正在处理消息...")
+                        await self.do_response(message)
+                    else:
+                        print("判断不需要回复，仅记入记忆。")
+                        self.brain.memorize(message)  # 背景谈话只记不答
+                        await self.brain.maybe_compress()  # 跳过回复的消息也要参与压缩
+                        self.face.hide_bubble()
+                except Exception as e:
+                    print(f"处理消息时出错了：{e}")
                     self.face.hide_bubble()
-            except Exception as e:
-                print(f"处理消息时出错了：{e}")
-                self.face.hide_bubble()
-            finally:
-                self.is_busy = False
-                # self.message_queue.task_done()  # 和 join 成对出现。当前队列没有调用 join，暂不启用。
+                finally:
+                    self.is_busy = False
+                    # self.message_queue.task_done()  # 和 join 成对出现。当前队列没有调用 join，暂不启用。
