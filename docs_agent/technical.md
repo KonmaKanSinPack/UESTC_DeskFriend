@@ -16,6 +16,8 @@ brain.py       Brain 门面：统一契约转发后端 + pack_msg/parse_tool_arg
 backends/      base.py（契约）/ __init__.py（工厂+create_judge）/ astrbot.py / openai.py / judger.py
 onebot_bridge.py  OneBot 11 反向 WS 伪装客户端
 listen.py / mouth.py / vision.py / skin.py   器官（耳/嘴/眼/皮）
+asr.py         ASR 引擎层（对称 tts.py）：SenseVoice（sherpa-onnx 本地，默认）/ Whisper（回退）
+               + create_asr 工厂 + 模型自动下载（hf-mirror 直链 → GitHub tar 兜底）
 tts.py         TTS 抽象 + SiliconFlow / CosyVoice2(未完成) / Dummy 工厂
 memory.py      MemoryStore（sqlite3 单文件 pet.db，服务 openai 后端）
 pw_capture.py  Wayland 静默截屏后端（ScreenCast Portal + PipeWire + GStreamer）
@@ -60,6 +62,15 @@ class BackendResponse:
 | 嘴 mouth | `async speak(text)`、`async interrupt() -> 前缀`、`async stop()`（退出收尾） | `busy` / `speaking` / `playing` / `window_open`、`finished` |
 | 眼 vision | `look_at_screen()`（内部多后端回退） | — |
 | 皮 skin | `show_bubble(text, timeout_ms)` / `hide_bubble()` / `set_anim_state(state)` | `text_submitted(str)`、`touched`、`quit_requested` |
+
+- **ASR 引擎**（2026-09-03，asr.py）：`ASR.transcribe(audio_f32, sample_rate) -> str`
+  （同步，跑耳线程）。`create_asr(config)` 按 `ASR_BACKEND` 装配：`sensevoice`
+  （sherpa-onnx 本地，默认，模型缺失自动下载）→ 失败回退 `whisper`（faster-whisper
+  small + initial_prompt）。器官内部换件，`text_signal` 接口不变。
+- **采集侧三小修**（listen.py 纯函数）：`PreRollBuffer`（触发前 ~224ms 保首字，
+  回声块不入缓冲）、`trim_trailing_silence`（裁尾部静音治幻觉，保留 3 块停顿）、
+  `boost_if_quiet`（峰值 <0.25 才等比放大）。已知限制：SenseVoice 转写无标点
+  （仅喂 LLM 不朗读，链路无影响）。
 
 - **退出编排**（2026-09-03）：皮 `quit_requested`（托盘/右键菜单「退出」广播）→
   `spine._shutdown()`（幂等闩）：`brain.stop()`（结算桥在飞请求）→ `mouth.stop()`

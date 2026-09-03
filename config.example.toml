@@ -1,5 +1,12 @@
 # 复制为 config.toml 并填入自己的值
 
+# ---- 语音识别（ASR）----
+# sensevoice（默认，本地 sherpa-onnx，中文精度高、CPU 快）：模型放 assets/models/sense-voice/
+#   （model.int8.onnx + tokens.txt，缺失时首次启动自动从 hf-mirror 下载 ~230MB，失败回退 whisper）
+# whisper（回退档，faster-whisper small）：走 HF 模型缓存
+# ASR_BACKEND = "sensevoice"
+# ASR_MODEL_DIR = "assets/models/sense-voice"  # 模型目录（相对项目根或绝对路径）
+
 # 回复后端：astrbot（默认，经 AstrBot 对话流，记忆/人格由 AstrBot 接管）/ openai（直连 LLM + 自建记忆）
 BACKEND = "astrbot"
 
