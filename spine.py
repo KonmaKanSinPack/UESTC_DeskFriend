@@ -131,11 +131,13 @@ class Spine:
         if not response.content:
             # 主动观察"无话可说"（astrbot 后端对"无"类回复返回空串）：完全静默——
             # 不气泡不朗读。用户消息永不返回空（astrbot 有兜底文案/openai 正常有内容）
+            self.face.set_pending(False)
             return
 
         print(response.content)
         self.face.set_anim_state("talking")
         self.face.show_bubble(response.content)
+        self.face.set_pending(False)  # 回复已呈现：生成中三点隐去
         # 桥超时/断线兜底（answered=False）：气泡给反馈，但不朗读——否则兜底文案被
         # 扬声器放出→麦克风拾回→回声自回复环（详见 docs_agent/session/2026-08-13.md 组B）
         if not response.answered:
@@ -213,6 +215,7 @@ class Spine:
             # "听对了没"——听错可马上重说，感知等待远短于只显示"正在想…"
             self.face.show_bubble(text, timeout_ms=60000)
             self.face.set_anim_state("thinking")
+            self.face.set_pending(True)  # 生成中三点指示；回复呈现/判否/异常时关
         except asyncio.QueueFull:
             print("消息队列已满，丢弃这条消息。")
 
@@ -224,6 +227,7 @@ class Spine:
             self.message_queue.put_nowait((USER_SOURCE, text))
             self.face.show_bubble(text, timeout_ms=60000)  # 显示原文确认受理（与听觉入口一致）
             self.face.set_anim_state("thinking")
+            self.face.set_pending(True)
         except asyncio.QueueFull:
             print("消息队列已满，丢弃这条消息。")
 
@@ -268,9 +272,11 @@ class Spine:
                         print("判断不需要回复，仅记入记忆。")
                         self.brain.memorize(message)  # 背景谈话只记不答
                         await self.brain.maybe_compress()  # 跳过回复的消息也要参与压缩
+                        self.face.set_pending(False)
                         self.face.hide_bubble()
                 except Exception as e:
                     print(f"处理消息时出错了：{e}")
+                    self.face.set_pending(False)
                     self.face.hide_bubble()
                 finally:
                     self.is_busy = False

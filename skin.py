@@ -12,9 +12,21 @@ import math
 from pathlib import Path
 
 import tomllib
-from PyQt5.QtCore import QPoint, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QIcon, QMovie, QPixmap
-from PyQt5.QtWidgets import QApplication, QLabel, QLineEdit, QMenu, QStyle, QSystemTrayIcon, QVBoxLayout, QWidget
+from PyQt5.QtCore import QPoint, QPropertyAnimation, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QIcon, QMovie, QPixmap
+from PyQt5.QtWidgets import (
+    QApplication,
+    QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QStyle,
+    QSystemTrayIcon,
+    QVBoxLayout,
+    QWidget,
+)
 
 PROJECT_DIR = Path(__file__).parent
 SPRITE_WIDTH = 150  # 贴图统一缩放到这个宽度
@@ -51,20 +63,52 @@ class Skin(QWidget):
         self._load_sprite()
         self._init_tray()
 
-        # 气泡：显示回复文本，平时隐藏
-        self.bubble = QLabel(self)
+        # 气泡 = 双层结构（2026-09-03 UI 美化轮）：Qt 单控件只能挂一个 QGraphicsEffect，
+        # 投影挂外层容器、透明度动画挂内层卡片，两者兼得。
+        # 外层：透明容器只承投影（暖深棕 20%，柔和下坠感）
+        self.bubble_host = QWidget(self)
+        self.bubble_host.setAttribute(Qt.WA_TranslucentBackground)
+        self._bubble_shadow = QGraphicsDropShadowEffect(self.bubble_host)
+        self._bubble_shadow.setColor(QColor(74, 59, 61, 52))
+        self._bubble_shadow.setBlurRadius(18)
+        self._bubble_shadow.setOffset(0, 3)
+        self.bubble_host.setGraphicsEffect(self._bubble_shadow)
+        # 内层：暖白圆角卡 + 桃红细节（用户选定的"现代圆角卡 + 桃桃红"）
+        self.bubble = QLabel(self.bubble_host)
         self.bubble.setWordWrap(True)
         self.bubble.setMaximumWidth(280)
         self.bubble.setStyleSheet(
-            "QLabel { background-color: rgba(255, 255, 255, 230);"
-            " border: 2px solid #e88; border-radius: 10px; padding: 8px; }"
+            "QLabel { background-color: #FFFDF8;"
+            " border: 1px solid rgba(212, 98, 111, 110);"
+            " border-radius: 16px; padding: 10px 14px;"
+            " color: #4A3B3D; font-family: 'Microsoft YaHei UI'; font-size: 10.5pt; }"
         )
-        self.bubble.hide()
+        self._bubble_opacity = QGraphicsOpacityEffect(self.bubble)
+        self.bubble.setGraphicsEffect(self._bubble_opacity)
+        host_layout = QHBoxLayout(self.bubble_host)
+        host_layout.setContentsMargins(0, 0, 0, 0)
+        host_layout.addWidget(self.bubble)
+        self.bubble_host.hide()
+
+        # 生成中指示：气泡下居中的三点跳动（现代聊天 typing 指示）
+        self.pending_label = QLabel(self)
+        self.pending_label.setAlignment(Qt.AlignCenter)
+        self.pending_label.setStyleSheet("color: #D4626F; font-size: 9pt; background: transparent;")
+        self.pending_label.hide()
+        self._dot_frame = 0
+        self._dots_timer = QTimer(self)
+        self._dots_timer.timeout.connect(self._tick_dots)
 
         # 文字输入框：单击桌宠唤起，回车发送，Esc 收起
         self.input_box = QLineEdit(self)
         self.input_box.setPlaceholderText("和桃桃说点什么…")
         self.input_box.setMaximumWidth(280)
+        self.input_box.setStyleSheet(
+            "QLineEdit { background-color: #FFFDF8;"
+            " border: 1px solid rgba(74, 59, 61, 60); border-radius: 12px; padding: 7px 12px;"
+            " color: #4A3B3D; font-family: 'Microsoft YaHei UI'; font-size: 10.5pt; }"
+            "QLineEdit:focus { border: 1.5px solid #D4626F; }"
+        )
         self.input_box.hide()
         self.input_box.returnPressed.connect(self._on_input_submitted)
         self.input_box.installEventFilter(self)
@@ -74,9 +118,14 @@ class Skin(QWidget):
         self.bubble_timer.setSingleShot(True)
         self.bubble_timer.timeout.connect(self.hide_bubble)
 
-        # 垂直布局：气泡、输入框在上，贴图在下；都隐藏时窗口收缩到贴图大小
+        # 气泡淡入淡出动画（150ms；淡出仅走超时路径，回复覆盖=立即切文本重淡入）
+        self._fade = QPropertyAnimation(self._bubble_opacity, b"opacity", self)
+        self._fade.setDuration(150)
+
+        # 垂直布局：气泡、指示点、输入框在上，贴图在下；都隐藏时窗口收缩到贴图大小
         layout = QVBoxLayout(self)
-        layout.addWidget(self.bubble, alignment=Qt.AlignHCenter)
+        layout.addWidget(self.bubble_host, alignment=Qt.AlignHCenter)
+        layout.addWidget(self.pending_label, alignment=Qt.AlignHCenter)
         layout.addWidget(self.input_box, alignment=Qt.AlignHCenter)
         layout.addWidget(self.label, alignment=Qt.AlignHCenter)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -150,17 +199,66 @@ class Skin(QWidget):
     # ---------- 命令（被主控命令；skin 不知道命令来自谁） ----------
 
     def show_bubble(self, text, timeout_ms=10000):
-        """显示气泡，timeout_ms 后自动隐藏（隐藏时自动复位动画状态）。"""
+        """显示气泡，timeout_ms 后自动淡出隐藏（隐藏时自动复位动画状态）。
+
+        回复覆盖旧气泡 = 立即切文本并重播淡入（先掐掉在飞的淡出，否则新内容
+        会被上一次淡出动画带走——淡出与显示的竞态点）。
+        """
+        self.bubble_timer.stop()
+        self._fade.stop()
+        self._disconnect_fade_finished()
         self.bubble.setText(text)
-        self.bubble.show()
+        self.bubble_host.show()
         self.adjustSize()
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.start()
         self.bubble_timer.start(timeout_ms)
 
     def hide_bubble(self):
-        self.bubble.hide()
+        """淡出后真正隐藏（150ms；直接 hide 会有一帧"闪没"的生硬感）。"""
         self.bubble_timer.stop()
+        self._fade.stop()
+        self._disconnect_fade_finished()
+        self._fade.setStartValue(self._bubble_opacity.opacity())
+        self._fade.setEndValue(0.0)
+        self._fade.finished.connect(self._after_fade_out)
+        self._fade.start()
+
+    def _after_fade_out(self):
+        self._disconnect_fade_finished()
+        self.bubble_host.hide()
         self.adjustSize()
         self._apply_anim_state("idle")
+
+    def _disconnect_fade_finished(self):
+        """断开淡出回调；无连接时 disconnect 抛 TypeError，静默吞掉。"""
+        try:
+            self._fade.finished.disconnect()
+        except TypeError:
+            pass
+
+    def set_pending(self, on):
+        """命令：回复生成中指示（气泡下三点跳动，380ms/帧）。
+
+        主控在消息入队时开、回复呈现/判否/异常时关；主动观察等自发消息
+        不开（自发内容对用户零打扰）。
+        """
+        if on:
+            self._dot_frame = 0
+            self.pending_label.show()
+            self._dots_timer.start(380)
+            self._tick_dots()
+            self.adjustSize()
+        else:
+            self._dots_timer.stop()
+            self.pending_label.hide()
+            self.adjustSize()
+
+    def _tick_dots(self):
+        frames = ("● · ·", "· ● ·", "· · ●")
+        self.pending_label.setText(frames[self._dot_frame % 3])
+        self._dot_frame += 1
 
     def set_anim_state(self, state):
         """语义级命令："idle" 待机呼吸 / "thinking" 思考晃动 / "talking" 说话弹跳。

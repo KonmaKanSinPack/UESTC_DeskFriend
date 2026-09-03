@@ -30,12 +30,16 @@ class FakeFace:
         self.bubbles = []  # (text, timeout_ms)
         self.anim_states = []
         self.hide_count = 0
+        self.pending = []  # set_pending 调用记录（True/False 序列）
 
     def show_bubble(self, text, timeout_ms=10000):
         self.bubbles.append((text, timeout_ms))
 
     def set_anim_state(self, state):
         self.anim_states.append(state)
+
+    def set_pending(self, on):
+        self.pending.append(on)
 
     def hide_bubble(self):
         self.hide_count += 1
@@ -217,6 +221,7 @@ def test_text_submitted_interrupts_and_queues():
         assert mouth.interrupt_count == 1
         assert brain.interruptions == ["第一句。"]
         assert brain.replies == ["你好"]
+        assert face.pending == [True, False]  # 入队开三点 → 回复呈现关三点
 
     asyncio.run(scenario())
 
@@ -323,6 +328,7 @@ def test_empty_content_fully_silent():
         assert face.bubbles == []
         assert face.anim_states == []
         assert mouth.speaks == []
+        assert face.pending == [False]  # 早退路径也要关掉生成中指示
 
     asyncio.run(scenario())
 
