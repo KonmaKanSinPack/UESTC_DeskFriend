@@ -146,7 +146,7 @@ spine.py ──5接口──▶ brain.py(Brain门面) ──▶ backends/{base,o
 ### 7.3 关键机制
 
 - **静默窗口**：AstrBot 可能连发多条回复（如"回复中提示"占位 + 最终回复），收到回复后 `ASTRBOT_SETTLE` 秒内无新回复才视为最终回复，取最后一条
-- **屏幕感知状态机**（事件驱动 + 变化门控 + 冷却）：idle 60s / active 20s 截屏 → 16×16 感知哈希 diff → 变化幅度超阈值 且 冷却期过 且 不在对话中 且 用户静默期过，才发桃桃"主动观察"消息；回复"无"类则静默丢弃，有内容则主动冒泡（`reply_sink` 回调）
+- **屏幕感知状态机**（事件驱动 + 变化门控 + 冷却，2026-09-03 起入统一消息流）：idle 60s / active 20s 截屏 → 16×16 感知哈希 diff → 变化幅度超阈值 且 冷却期过 且 不在对话中 且 用户静默期过，才经 `observe_sink` 把"主动观察"文案交主控入统一队列（`(source=proactive, text)` 分流：不与用户消息合并、跳过 should_reply、与用户消息同一 do_response 呈现路径）；截图由 SCREEN_KEYWORDS 路径自动附图。自发消息不更新用户时间窗、不消费打断标记；回复"无"类返回空 content=完全静默；有内容时**仅活跃期朗读**（用户 2 分钟内交互过，`BackendResponse.speak=False` 只冒泡）
 - **`[look_at_screen]` 协议**：桃桃回复含此标记 → 桌宠本地截屏 → 附图追问（≤3 轮）→ 显示最终回复；作为"LLM 主动调工具看屏幕"的轻量实现（MCP 为阶段四候选）
 - **should_reply 判定（2026-08-10 起统一走 LLM 决策器）**：废弃本地关键词规则（漏判严重，且提示词与实现分离）。`backends/judger.py` 的 `LLMJudge`（few-shot 提示词 + "不确定输出 true"）统一判定：
   - openai 后端（2026-08-14 起）：判定上下文（首条 system = JUDGE_SYSTEM_PROMPT）路由到独立判定器（`JUDGE_URL` 优先 / `BASE_URL` 回退 + `JUDGE_MODEL`），不进主对话流、不占主模型额度；未配置判定器 → 回退主 client 判定（旧行为）
