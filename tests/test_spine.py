@@ -26,6 +26,7 @@ class FakeFace:
     def __init__(self):
         self.text_submitted = StubSignal()
         self.touched = StubSignal()
+        self.quit_requested = StubSignal()
         self.bubbles = []  # (text, timeout_ms)
         self.anim_states = []
         self.hide_count = 0
@@ -62,6 +63,10 @@ class FakeBrain:
         self.interruptions = []
         self.compress_count = 0
         self.extract_count = 0
+        self.stop_count = 0
+
+    async def stop(self):
+        self.stop_count += 1
 
     async def get_llm_response(self, message, model=None):
         if self.raise_on_reply:
@@ -94,6 +99,7 @@ class FakeMouth:
         self.interrupt_prefix = "第一句。"
         self.echo_texts = set()
         self.speaks = []
+        self.stop_count = 0
 
     def is_echo(self, text):
         return text in self.echo_texts
@@ -104,6 +110,9 @@ class FakeMouth:
     async def interrupt(self):
         self.interrupt_count += 1
         return self.interrupt_prefix
+
+    async def stop(self):
+        self.stop_count += 1
 
 
 class FakeVision:
@@ -246,5 +255,62 @@ def test_echo_text_dropped():
         await asyncio.sleep(0.05)
         assert spine.message_queue.empty()
         assert face.bubbles == []
+
+    asyncio.run(scenario())
+
+
+# ---------- 退出编排 ----------
+
+
+def test_quit_requested_stops_organs_in_order_and_quits():
+    """退出请求：脑先停、嘴再停、quit_app 最后且恰好一次（资源依赖序）。"""
+
+    async def scenario():
+        order = []
+        brain, mouth = FakeBrain(), FakeMouth()
+        brain.stop = _probed_stop(order, "brain", brain.stop_count)
+        mouth.stop = _probed_stop(order, "mouth", mouth.stop_count)
+        quits = []
+        spine, *_ = make_spine(brain=brain, mouth=mouth, quit_app=lambda: quits.append(True))
+        spine.face.quit_requested.emit()
+        await asyncio.sleep(0.05)
+        assert order == ["brain", "mouth"]
+        assert quits == [True]
+
+    asyncio.run(scenario())
+
+
+def _probed_stop(order, name, _):
+    """把替身的 stop 包一层顺序探针（忽略原计数，顺序为准）。"""
+
+    async def stop():
+        order.append(name)
+
+    return stop
+
+
+def test_quit_idempotent_on_repeated_requests():
+    """幂等闩：托盘+右键并发/菜单双击的重复退出请求只收摊一次。"""
+
+    async def scenario():
+        spine, _, brain, mouth = make_spine(quit_app=lambda: None)
+        spine.face.quit_requested.emit()
+        spine.face.quit_requested.emit()
+        await asyncio.sleep(0.05)
+        assert brain.stop_count == 1
+        assert mouth.stop_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_quit_without_quit_app_is_safe():
+    """未注入 quit_app（纯测试装配）：器官仍收摊，不抛异常。"""
+
+    async def scenario():
+        spine, _, brain, mouth = make_spine()  # 不传 quit_app
+        spine._on_quit_requested()
+        await asyncio.sleep(0.05)
+        assert brain.stop_count == 1
+        assert mouth.stop_count == 1
 
     asyncio.run(scenario())

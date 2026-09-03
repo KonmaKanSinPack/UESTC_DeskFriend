@@ -22,7 +22,8 @@ if __name__ == "__main__":
     asyncio.set_event_loop(loop)  # 设置异步事件循环
 
     face = Skin()  # 外观器官（窗口本体）
-    spine = Spine(face=face)  # 主控中枢：内部装配 brain/vision/listen/mouth 并接线
+    # quit_app 桥接 Qt↔spine 的唯一交点：收摊顺序归 spine 编排，退出循环由 Qt 侧执行
+    spine = Spine(face=face, quit_app=app.quit)  # 主控中枢：内部装配 brain/vision/listen/mouth 并接线
     spine.start()  # 起消费者任务（loop 已 set 未 run，走 get_event_loop 回退分支）
     face.show()
 

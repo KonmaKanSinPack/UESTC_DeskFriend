@@ -24,13 +24,16 @@ class Spine:
     全部依赖可注入（测试用）；生产路径默认装配（照 Brain(backend=None)/Mouth(tts=None) 模式）。
     """
 
-    def __init__(self, face=None, config=None, brain=None, vision=None, listen=None, mouth=None):
+    def __init__(self, face=None, config=None, brain=None, vision=None, listen=None, mouth=None, quit_app=None):
         self.face = face or Skin()
         config = config or load_config()
         self.brain = brain or Brain()
         self.vision = vision or Vision()
         self.listen = listen or Listen()
         self.mouth = mouth or Mouth(config)
+        # 退出回调由装配层（main）注入 app.quit——spine 零 Qt 依赖的红线靠它保住
+        self._quit_app = quit_app
+        self._shutting_down = False  # 幂等闩：托盘+右键并发/菜单双击不重复收摊
 
         # —— 接线（"中枢神经"的本体）：器官信号 → 主控处理 ——
         self.listen.mouth = self.mouth  # 耳朵引用嘴：朗读期间忽略扬声器回声（单向只读）
@@ -39,6 +42,7 @@ class Spine:
         self.listen.text_signal.connect(self.on_heard_text)  # 发射器.信号.connect(接收器)
         self.face.text_submitted.connect(self._on_text_submitted)
         self.face.touched.connect(self._on_touched)
+        self.face.quit_requested.connect(self._on_quit_requested)  # 托盘/右键「退出」
         # 主动冒泡回调：astrbot 后端（屏幕感知）发现值得说的话时直接显示气泡
         self.brain.reply_sink = self._on_proactive_bubble
 
@@ -51,6 +55,23 @@ class Spine:
     def start(self):
         """起消费者任务（与构造分离：test_spine 无需活 loop 即可实例化）。"""
         asyncio.get_event_loop().create_task(self.on_received_message_consumer())
+
+    # ---------- 退出编排 ----------
+
+    def _on_quit_requested(self):
+        """皮信号入口（托盘/右键「退出」）：把收摊协程挂到 loop（同 on_heard_text 模式）。"""
+        asyncio.get_event_loop().create_task(self._shutdown())
+
+    async def _shutdown(self):
+        """按资源依赖序收摊：先脑（结算桥在飞请求/取消观察循环）→ 再嘴（停朗读/释放 TTS）
+        → 最后交装配层退出事件循环。幂等：重复的退出请求直接忽略。"""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        await self.brain.stop()
+        await self.mouth.stop()
+        if self._quit_app:
+            self._quit_app()
 
     # ---------- 回复编排 ----------
 
