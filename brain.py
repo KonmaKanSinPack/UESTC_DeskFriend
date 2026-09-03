@@ -39,7 +39,7 @@ def parse_tool_args(args_str):
 
 
 class Brain:
-    """门面：按配置装配后端，原样转发五个接口；reply_sink 转发给支持主动冒泡的后端。"""
+    """门面：按配置装配后端，原样转发五个接口；observe_sink 转发给有主动观察的后端。"""
 
     def __init__(self, backend=None):
         """backend 可注入（测试用）；生产路径从 config.toml 经工厂创建。"""
@@ -65,14 +65,15 @@ class Brain:
             self.backend.interruption = prefix
 
     @property
-    def reply_sink(self):
-        """主动冒泡回调：后端（astrbot 的屏幕感知）有值得说的话时调用，ui 挂 show_bubble。"""
-        return getattr(self.backend, "reply_sink", None)
+    def observe_sink(self):
+        """主动观察提交回调：astrbot 后端（屏幕感知门控通过）要发起观察时调用，
+        spine 挂入队入口——统一消息流的自发源（替代旧 reply_sink 旁路，2026-09-03）。"""
+        return getattr(self.backend, "observe_sink", None)
 
-    @reply_sink.setter
-    def reply_sink(self, fn):
-        if hasattr(self.backend, "reply_sink"):
-            self.backend.reply_sink = fn
+    @observe_sink.setter
+    def observe_sink(self, fn):
+        if hasattr(self.backend, "observe_sink"):
+            self.backend.observe_sink = fn
 
     # ---- 五个接口：原样转发 ----
 

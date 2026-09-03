@@ -27,6 +27,7 @@ class BackendResponse:
     content: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     answered: bool = True  # False=桥超时/断线兜底，非真实回复；主控不朗读（默认 True → openai 后端零改动）
+    speak: bool = True  # False=只显示不朗读（主动观察空闲期：仅活跃期朗读）；与 answered 语义独立（2026-09-03）
 
 
 class ReplyBackend(ABC):

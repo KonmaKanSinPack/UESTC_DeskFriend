@@ -197,28 +197,84 @@ class TestMemoryNoop:
         asyncio.run(backend.maybe_extract_facts())
 
 
-class TestProactiveLook:
-    def test_sink_called_on_worthwhile_reply(self, backend, monkeypatch):
-        monkeypatch.setattr(backend, "_capture_segment", lambda: FAKE_IMG)
-        bubbles = []
-        backend.reply_sink = bubbles.append
-        backend.bridge.replies = ["主人，你屏幕上出现了新通知！"]
-        asyncio.run(backend._proactive_look())
-        assert bubbles == ["主人，你屏幕上出现了新通知！"]
-        assert backend.bridge.sent[0][0]["data"]["text"] == PROACTIVE_OBSERVE_TEXT
+class _Clock:
+    """_check_and_observe 需要的 loop.time() 最小替身（不拉真事件循环）。"""
 
-    def test_sink_silent_on_no_reply(self, backend, monkeypatch):
+    def time(self):
+        return 1000.0
+
+
+class TestProactiveObserve:
+    """统一消息流（2026-09-03）：门控通过 → observe_sink 只交文案，不再直接发桥。"""
+
+    def test_gate_pass_submits_observe_text_to_sink(self, backend, monkeypatch):
+        submitted = []
+        backend.observe_sink = submitted.append
+        monkeypatch.setattr("vision.grab_screenshot", lambda: object())
+        monkeypatch.setattr("backends.astrbot.phash", lambda img: 0x1)
+        monkeypatch.setattr("backends.astrbot.phash_score", lambda a, b, bits=256: 0.5)
+        monkeypatch.setattr("backends.astrbot.should_observe", lambda *a, **kw: True)
+        backend._last_phash = 0x2  # 已有上次哈希 → change 走 phash_score
+
+        asyncio.run(backend._check_and_observe(_Clock()))
+        assert submitted == [PROACTIVE_OBSERVE_TEXT]
+        assert backend.bridge.sent == []  # 观察循环自己不发桥：由统一队列经 get_llm_response 发
+
+    def test_gate_blocked_submits_nothing(self, backend, monkeypatch):
+        submitted = []
+        backend.observe_sink = submitted.append
+        monkeypatch.setattr("vision.grab_screenshot", lambda: object())
+        monkeypatch.setattr("backends.astrbot.phash", lambda img: 0x1)
+        monkeypatch.setattr("backends.astrbot.phash_score", lambda a, b, bits=256: 0.5)
+        monkeypatch.setattr("backends.astrbot.should_observe", lambda *a, **kw: False)
+
+        asyncio.run(backend._check_and_observe(_Clock()))
+        assert submitted == []
+
+
+class TestProactiveBranch:
+    """get_llm_response 的 PROACTIVE_MARKER 分支：时间窗/打断/空内容/speak 四个守卫。"""
+
+    def test_no_reply_returns_empty_content(self, backend, monkeypatch):
         monkeypatch.setattr(backend, "_capture_segment", lambda: FAKE_IMG)
-        bubbles = []
-        backend.reply_sink = bubbles.append
         backend.bridge.replies = ["无"]
-        asyncio.run(backend._proactive_look())
-        assert bubbles == []
+        resp = asyncio.run(backend.get_llm_response(PROACTIVE_OBSERVE_TEXT))
+        assert resp.content == ""
+        assert resp.answered is True
 
-    def test_sink_silent_without_sink(self, backend, monkeypatch):
+    def test_proactive_keeps_user_window_and_interruption(self, backend, monkeypatch):
         monkeypatch.setattr(backend, "_capture_segment", lambda: FAKE_IMG)
         backend.bridge.replies = ["有话说"]
-        asyncio.run(backend._proactive_look())  # 无 sink 不抛错
+        backend.interruption = "第一句。"
+        resp = asyncio.run(backend.get_llm_response(PROACTIVE_OBSERVE_TEXT))
+        # 自发消息不得重置用户时间窗（否则"用户静默"观察门控失灵）
+        assert backend._last_user_at == 0.0
+        assert backend._active_until == 0.0
+        # 打断标记留给下一条用户消息，自发消息不消费
+        assert backend.interruption == "第一句。"
+        assert backend.bridge.sent[0][0]["data"]["text"] == PROACTIVE_OBSERVE_TEXT
+        assert resp.speak is False  # 空闲期（_active_until=0）
+
+    def test_proactive_active_window_speaks(self, backend, monkeypatch):
+        monkeypatch.setattr(backend, "_capture_segment", lambda: FAKE_IMG)
+        backend.bridge.replies = ["值得说的话", "又一句"]
+
+        async def scenario():
+            loop = asyncio.get_running_loop()
+            backend._active_until = loop.time() + 100  # 用户 2 分钟内交互过
+            return await backend.get_llm_response(PROACTIVE_OBSERVE_TEXT)
+
+        resp = asyncio.run(scenario())
+        assert resp.speak is True
+
+    def test_user_message_updates_window_and_consumes_interruption(self, backend):
+        backend.bridge.replies = ["好的"]
+        backend.interruption = "第一句。"
+        resp = asyncio.run(backend.get_llm_response("你好"))
+        assert backend._last_user_at > 0.0
+        assert backend.interruption is None
+        assert "[对话被打断]" in backend.bridge.sent[0][0]["data"]["text"]
+        assert resp.speak is True  # 用户回复默认朗读
 
 
 class TestGate:
