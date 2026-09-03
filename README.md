@@ -2,7 +2,7 @@
 
 桌面 AI 伙伴（桌宠），形象为糯糯（Q版弗洛洛）。常驻桌面一隅，能听、能看、能聊、能说：
 
-- **听觉**：麦克风常驻监听，Silero VAD（ONNX，本地模型）检测说话，faster-whisper 中文语音转文字
+- **听觉**：麦克风常驻监听，Silero VAD（ONNX，本地模型）检测说话，SenseVoice 本地转写（中文精度高、CPU 快，模型缺失自动下载；whisper 为回退档）
 - **视觉**：截屏注入多模态大模型上下文，说一句"看看我的屏幕"它就能描述你在干什么
 - **对话**：可插拔回复后端（`config.toml` 的 `BACKEND` 键选择）：
   - `astrbot`（默认）：经 OneBot 11 伪装通道接入 AstrBot 的桃桃，记忆/人格由 AstrBot 接管；自带屏幕感知（屏幕变化时主动观察冒泡）
@@ -120,8 +120,10 @@ uv run python -c "from faster_whisper import WhisperModel; m = WhisperModel('sma
 ### 模型
 
 - VAD 模型已内置（`assets/silero_vad.onnx`），无需下载
-- faster-whisper `small` 首次使用需下载（约 460MB）。之后启动全部离线
-- 网络不佳时用镜像下载：
+- **ASR（SenseVoice，默认）零手动步骤**：首次启动检测 `assets/models/sense-voice/`
+  缺失时自动下载（~230MB，hf-mirror 直链优先）；之后启动全部离线。下载失败自动
+  回退 whisper
+- whisper（回退档）`small` 首次使用需手动预下载（约 460MB）。网络不佳时用镜像：
 
 ```bash
 export HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1

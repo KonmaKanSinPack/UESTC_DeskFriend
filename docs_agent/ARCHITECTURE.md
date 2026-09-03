@@ -34,14 +34,14 @@
    │ 信号        │ 信号        │ 命令        │ 命令+信号
    ▼            ▼            ▼            ▼
  ear: listen.py   eye: vision.py  mouth: mouth.py  skin: skin.py
- VAD+Whisper→text 截屏理解       发声+回声门控    贴图/气泡/动画/托盘/触摸
+ VAD+SenseVoice→text 截屏理解       发声+回声门控    贴图/气泡/动画/托盘/触摸
  text_signal(str)                finished 信号    ←show_bubble/set_anim_state
                                                   →text_submitted/touched/quit_requested
 ```
 
 | 器官 | 文件 | 职责（只管这些） | 对外接口 | 事件广播 |
 |------|------|------------------|----------|----------|
-| 耳 | `listen.py` | 采集 → VAD → Whisper 转写；句间窗口门控 | `text_signal(str)` | 转写结果、`interrupt_requested`（窗口内用户说话） |
+| 耳 | `listen.py` | 采集 → VAD → SenseVoice 转写（引擎在 asr.py，whisper 回退）；句间窗口门控 | `text_signal(str)` | 转写结果、`interrupt_requested`（窗口内用户说话） |
 | 嘴 | `mouth.py` | 发声 + 门控 + 句间监听窗口（内部消化尾巴/try-finally/guard） | `speak(text)` / `interrupt()->前缀` / `stop()`（退出收尾） / `busy` / `speaking` / `window_open` | `finished` |
 | 眼 | `vision.py` | 截屏（多后端回退） | `look_at_screen()` | — |
 | 皮 | `skin.py` | 显示（贴图/气泡/动画/托盘）+ 触摸输入（点击/拖动/双击/右键/文字） | `show_bubble(text)` / `hide_bubble()` / `set_anim_state(state)` | `text_submitted(str)`、`touched`、`quit_requested` |

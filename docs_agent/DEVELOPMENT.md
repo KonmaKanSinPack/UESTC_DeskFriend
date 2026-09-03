@@ -7,7 +7,7 @@
 
 ### 已有能力
 - PyQt5 无边框透明置顶窗，可拖动，双击可交互
-- Silero VAD 语音活动检测 + faster-whisper 中文转写
+- Silero VAD 语音活动检测 + SenseVoice 中文转写（asr.py 可插拔：SenseVoice 默认/whisper 回退，2026-09-03）
 - `ImageGrab` 截屏 + base64 注入多模态 LLM 上下文
 - OpenAI 兼容接口（`gemini-2.5-pro`），tool calling 循环（`look_at_screen`）
 - 消息队列（生产者-消费者）+ 是否回复的预判断（`should_reply`）
@@ -52,6 +52,7 @@
 12. **器官化架构哲学（各司其职，2026-08-11 确立）**：大模型（大脑）只输出意图、绝不碰物理硬件；器官（listen/mouth/vision/skin）是纯物理层，不调用 LLM、不依赖 brain；主控中心（spine，脊髓）监听器官信号、编排一切。硬规则与判定清单见独立指导文件 **`docs/ARCHITECTURE.md`**（开发前必读，CLAUDE.md 已挂引用）。
 13. **ui.py 拆分为 skin（外观器官）+ spine（主控中枢）（2026-08-13）**：ui.py 同时承担外观（贴图/气泡/输入框/动画/拖拽/双击彩蛋）与编排（器官装配/消息队列/should_reply/do_response/tool_executer/打断编排）两类职责，违反决策 12「主控中枢不堆器官实现细节」。拆为 **`skin.py`**（`Skin(QWidget)` 外观器官：广播 `text_submitted`/`touched` 信号、接受 `show_bubble`/`set_anim_state` 命令，不认 brain/LLM）+ **`spine.py`**（`Spine` 主控中枢，plain class 非 QObject → 协程槽用 `create_task` 而非 `@qasync.asyncSlot`，消费者任务在 `start()` 起，编排逻辑首次可单测）。原则：**零行为变化纯搬移**。顺带删除死状态 `on_timer_trick`（10s 定时截屏喂养无人消费的 `vision.history`）。方案与实施记录见 `docs/session/2026-08-13.md`。
 14. **ASR 引擎可插拔：SenseVoice 本地默认 / Whisper 回退（2026-09-03）**：whisper-small 的中文识别是弱项（同音字/专有名词/口语，CPU int8 再损一档）。新增 `asr.py`（与 tts.py↔mouth.py 对称的纯工具层）：`create_asr(config)` 按 `ASR_BACKEND` 装配——`sensevoice`（sherpa-onnx 纯 onnxruntime 无 torch，中文精度显著更高、CPU 推理更快，`use_itn=True`）→ 缺依赖/缺模型回退 `whisper`（迁入 + `initial_prompt="以下是普通话的句子。"` 压繁体/幻觉）。模型（~230MB int8 + tokens，gitignored）缺失时自动下载：hf-mirror 直链优先 → GitHub release tar 兜底（tar 只提取 int8 与词表）。采集侧三小修同轮落地（listen.py 纯函数）：`PreRollBuffer`（触发前 ~224ms 保首字，回声块不入缓冲）、`trim_trailing_silence`（裁尾静音治幻觉）、`boost_if_quiet`（小音量保守增益）。已知限制：SenseVoice 转写无标点（fst 在不可达的 GitHub tar 内）——转写只喂 LLM 不朗读，链路无影响。本机下载坑（UA/IPv6/ORT 共存）记 `local.md`。
+15. **流畅性快赢：帧率分档 + VAD 缩短 + 受理气泡显原文（2026-09-03，调研驱动）**：①skin 动画帧率随状态分档（idle 8fps / thinking·talking 25fps，相位按毫秒等比推进保节奏）——动整窗的分层窗口每帧触发 DWM 全窗 alpha 重合成，idle 降帧即省 CPU；②VAD 静音判完 1.5s→1.0s（行业典型 0.7~1.0s；截断由 consumer 合并连续片段兜底，内容不丢）；③受理气泡显示转写原文（60s 兜底、回复覆盖）——"听对没"一眼可辨，感知延迟直降。来源：ElevenLabs voice-agent-latency-optimization / arXiv 2508.04721 / Qt 官方文档。
 
 ## 4. 分阶段任务
 
