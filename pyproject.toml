@@ -44,6 +44,7 @@ dependencies = [
     "wget>=3.2",
     "pyarrow>=25.0.1",
     "sherpa-onnx>=1.13.7",
+    "sherpa-onnx-core==1.13.7",
 ]
 
 [dependency-groups]

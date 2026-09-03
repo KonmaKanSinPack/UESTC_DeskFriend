@@ -10,36 +10,136 @@
 阿拉伯化）。Whisper 保留为回退，并补 initial_prompt 压繁体/翻译腔。
 """
 
+import socket
 import tarfile
 import urllib.request
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
 
 PROJECT_DIR = Path(__file__).parent
 DEFAULT_MODEL_DIR = PROJECT_DIR / "assets" / "models" / "sense-voice"
-# GitHub release 直连（本机实测 302 可达）。tar.bz2 内含 fp32/int8 两版 onnx + 词表，
-# 只提取 int8 与 tokens 两文件后删包。hf-mirror 在本机 401 不可作主源（记 local.md）。
+# 模型源分两级（本机实测 2026-09-03）：
+# 1) 首选逐文件直链：hf-mirror（国内可达，实测 939KB tokens/263MB 模型均可下）
+#    → huggingface.co（海外机器）。仓库是官方 2024-07-17 转换的两文件直传，
+#    免 tar 解包。
+# 2) 兜底 GitHub release tar.bz2（含 fp32/int8 两版 onnx，只提取 int8 与词表）。
+#    本机实测其资产主机 GET 超时（HEAD 却可达），故只作最后手段。
+MODEL_REPO = "HatiSkoll28/sherpa-onnx-sense-voice-int8"
+MODEL_FILE_URLS = {
+    "model.int8.onnx": [
+        f"https://hf-mirror.com/{MODEL_REPO}/resolve/main/model.int8.onnx",
+        f"https://huggingface.co/{MODEL_REPO}/resolve/main/model.int8.onnx",
+    ],
+    "tokens.txt": [
+        f"https://hf-mirror.com/{MODEL_REPO}/resolve/main/tokens.txt",
+        f"https://huggingface.co/{MODEL_REPO}/resolve/main/tokens.txt",
+    ],
+}
 MODEL_DOWNLOAD_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
     "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
 )
 
 
-def _download_progress(count, block_size, total_size):
-    """urlretrieve 回调：每 ~200 块打一次百分比，避免刷屏。"""
-    if total_size > 0 and count % 200 == 0:
-        print(f"下载进度：{min(100, count * block_size * 100 // total_size)}%")
+@contextmanager
+def _ipv4_only():
+    """下载期间强制 IPv4 解析（用完恢复，不污染全局网络栈）。
+
+    本机实测（2026-09-03）：IPv6 路由到模型 CDN 会被重置（WinError 10054），
+    且无 UA 的请求被 CDN 403；「IPv4 + UA」组合 200 可达（curl 能下同 URL 正因
+    它走 IPv4 回退 + 自带 UA）。作用域收窄到单次下载：应用其它网络（LLM/TTS/桥）
+    不受影响；仅首次下载模型时会短暂经过本上下文。
+    """
+    orig = socket.getaddrinfo
+
+    def _v4(*args, **kwargs):
+        return [r for r in orig(*args, **kwargs) if r[0] == socket.AF_INET]
+
+    socket.getaddrinfo = _v4
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = orig
+
+
+def _http_download(url, dest: Path) -> None:
+    """带 UA + IPv4 的流式下载（失败抛异常，由调用方决定回退）。
+
+    为什么不用 urlretrieve：hf-mirror 的 CDN 实测拒绝 Python-urllib 默认 UA
+    （WinError 10054 / 403；同 URL curl 可下）。每 ~10% 打一次进度；
+    Content-Length 缺失时跳过进度。
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (UESTC-DeskFriend)"})
+    with _ipv4_only(), urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done, last_pct = 0, -1
+        while True:
+            block = resp.read(1 << 16)
+            if not block:
+                break
+            f.write(block)
+            done += len(block)
+            if total:
+                pct = done * 100 // total
+                if pct != last_pct and pct % 10 == 0:
+                    last_pct = pct
+                    print(f"下载进度：{pct}%")
+
+
+def _download_first_available(urls, target: Path) -> bool:
+    """按序尝试直链下载单个文件到 target；任一成功即返回 True。
+
+    失败时清掉半截文件再试下一源——下载中途断开会留下不完整的
+    model.int8.onnx，若不清，下次启动会把它当完整模型加载然后神秘报错。
+    """
+    for url in urls:
+        try:
+            print(f"下载模型文件：{url}")
+            _http_download(url, target)
+            print("下载完成")
+            return True
+        except Exception as e:
+            print(f"该源失败（{e}），尝试下一个...")
+            target.unlink(missing_ok=True)
+    return False
+
+
+def _download_and_extract_tar(model_dir: Path, model_path: Path, tokens_path: Path) -> bool:
+    """兜底路径：下载 GitHub release tar.bz2 并只提取 int8 模型与词表两文件。"""
+    tar_path = model_dir / "sense-voice.tar.bz2"
+    print(f"直链均不可用，尝试 GitHub release tar：{MODEL_DOWNLOAD_URL}")
+    try:
+        _http_download(MODEL_DOWNLOAD_URL, tar_path)
+        print("下载完成，解压模型文件...")
+    except Exception as e:
+        print(f"tar 下载失败（{e}）")
+        tar_path.unlink(missing_ok=True)
+        return False
+    try:
+        with tarfile.open(tar_path, "r:bz2") as tar:
+            for member in tar.getmembers():
+                # 按 basename 匹配并展平到目标目录（tar 内带一层版本目录名）
+                if Path(member.name).name in ("model.int8.onnx", "tokens.txt"):
+                    member.name = Path(member.name).name
+                    tar.extract(member, model_dir, filter="data")
+    except Exception as e:
+        print(f"模型解压失败（{e}）")
+        return False
+    finally:
+        tar_path.unlink(missing_ok=True)  # 压缩包不留盘（~250MB）
+    return model_path.exists() and tokens_path.exists()
 
 
 def download_sensevoice_model(model_dir=DEFAULT_MODEL_DIR) -> bool:
-    """确保 SenseVoice 模型文件存在，缺失则自动下载解包；成功返回 True。
+    """确保 SenseVoice 模型文件存在，缺失则自动下载；成功返回 True。
 
     复现/原理：模型不进 git（~230MB，assets/models/ 已 gitignore）。首次启动检测
-    两个文件（model.int8.onnx + tokens.txt）缺失 → 下载 release tar.bz2 → 用 tarfile
-    按"文件名匹配"提取这两个成员（tar 内是 fp32/int8 两版，只要 int8）→ 删压缩包。
-    有缓存即完全离线（启动零下载原则不破坏）；任何失败返回 False，调用方回退 Whisper。
+    两个文件（model.int8.onnx + tokens.txt）缺失 → 逐文件直链下载（hf-mirror 优先）
+    → 直链全败再走 GitHub tar 兜底（只提取需要的两文件）。有缓存即完全离线
+    （启动零下载原则不破坏）；任何失败返回 False，调用方回退 Whisper。
     """
     model_dir = Path(model_dir)
     model_path = model_dir / "model.int8.onnx"
@@ -48,30 +148,13 @@ def download_sensevoice_model(model_dir=DEFAULT_MODEL_DIR) -> bool:
         return True
 
     model_dir.mkdir(parents=True, exist_ok=True)
-    tar_path = model_dir / "sense-voice.tar.bz2"
-    print(f"未找到 SenseVoice 模型，开始下载（约 250MB，仅首次）：{MODEL_DOWNLOAD_URL}")
-    try:
-        urllib.request.urlretrieve(MODEL_DOWNLOAD_URL, tar_path, reporthook=_download_progress)
-        print("下载完成，解压模型文件...")
-    except Exception as e:
-        print(f"模型下载失败（{e}），将回退 Whisper")
-        tar_path.unlink(missing_ok=True)
-        return False
-
-    try:
-        with tarfile.open(tar_path, "r:bz2") as tar:
-            for member in tar.getmembers():
-                # 按 basename 匹配并展平到目标目录（tar 内带一层版本目录名）
-                if Path(member.name).name in ("model.int8.onnx", "tokens.txt"):
-                    member.name = Path(member.name).name
-                    tar.extract(member, model_dir)
-    except Exception as e:
-        print(f"模型解压失败（{e}），将回退 Whisper")
-        return False
-    finally:
-        tar_path.unlink(missing_ok=True)  # 压缩包不留盘（~250MB）
-
-    return model_path.exists() and tokens_path.exists()
+    for name, urls in MODEL_FILE_URLS.items():
+        target = model_dir / name
+        if target.exists():
+            continue
+        if not _download_first_available(urls, target):
+            return _download_and_extract_tar(model_dir, model_path, tokens_path)
+    return True
 
 
 class ASR(ABC):
@@ -119,7 +202,7 @@ class SenseVoiceEngine(ASR):
         pad = np.zeros(int(0.3 * sample_rate), dtype=np.float32)
         stream = self.recognizer.create_stream()
         stream.accept_waveform(sample_rate, np.concatenate([audio_f32, pad]))
-        self.recognizer.decode(stream)
+        self.recognizer.decode_stream(stream)
         return (stream.result.text or "").strip()
 
 

@@ -1,6 +1,7 @@
 """ASR 引擎层单测：工厂选择/回退、下载器、假 recognizer 的转写链。不加载真模型。"""
 
 import tarfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -22,7 +23,7 @@ class FakeRecognizer:
     def accept_waveform(self, sample_rate, samples):
         self.fed.append((sample_rate, np.asarray(samples)))
 
-    def decode(self, stream):
+    def decode_stream(self, stream):
         pass
 
     @property
@@ -90,15 +91,30 @@ def test_download_skips_when_files_exist(tmp_path):
 
 
 def test_download_failure_returns_false(tmp_path, monkeypatch):
-    def broken_urlretrieve(url, path, reporthook=None):
-        raise OSError("network down")
-
-    monkeypatch.setattr(asr_mod.urllib.request, "urlretrieve", broken_urlretrieve)
+    monkeypatch.setattr(
+        asr_mod,
+        "_http_download",
+        lambda url, dest: (_ for _ in ()).throw(OSError("network down")),
+    )
     assert asr_mod.download_sensevoice_model(tmp_path) is False
 
 
+def test_download_direct_links_write_both_files(tmp_path, monkeypatch):
+    """首选路径：直链逐文件下载成功 → 两文件就位，不触碰 tar 兜底。"""
+
+    def fake_direct(urls, target):
+        target.write_bytes(("dl:" + Path(urls[0]).name).encode())
+        return True
+
+    monkeypatch.setattr(asr_mod, "_download_first_available", fake_direct)
+    assert asr_mod.download_sensevoice_model(tmp_path) is True
+    assert (tmp_path / "model.int8.onnx").read_bytes() == b"dl:model.int8.onnx"
+    assert (tmp_path / "tokens.txt").read_bytes() == b"dl:tokens.txt"
+    assert not (tmp_path / "sense-voice.tar.bz2").exists()
+
+
 def test_download_extracts_int8_and_tokens_only(tmp_path, monkeypatch):
-    """下载后解包：只提取 model.int8.onnx 与 tokens.txt（展平），压缩包删除。"""
+    """兜底路径：直链全败 → GitHub tar 只提取 model.int8.onnx 与 tokens.txt（展平），压缩包删除。"""
     inner = tmp_path / "inner"
     inner.mkdir()
     (inner / "model.int8.onnx").write_bytes(b"int8")
@@ -112,14 +128,15 @@ def test_download_extracts_int8_and_tokens_only(tmp_path, monkeypatch):
 
     target = tmp_path / "target"
     target.mkdir()
+    monkeypatch.setattr(asr_mod, "_download_first_available", lambda urls, t: False)  # 逼走兜底
 
-    def fake_urlretrieve(url, path, reporthook=None):
+    def fake_http_download(url, dest):
         # 模拟下载：把预制的 tar 拷到目标路径
         import shutil
 
-        shutil.copy(tar_path, path)
+        shutil.copy(tar_path, dest)
 
-    monkeypatch.setattr(asr_mod.urllib.request, "urlretrieve", fake_urlretrieve)
+    monkeypatch.setattr(asr_mod, "_http_download", fake_http_download)
     assert asr_mod.download_sensevoice_model(target) is True
     assert (target / "model.int8.onnx").read_bytes() == b"int8"
     assert (target / "tokens.txt").read_bytes() == b"tok"
@@ -131,10 +148,10 @@ def test_download_extracts_int8_and_tokens_only(tmp_path, monkeypatch):
 def test_download_missing_one_file_fails(tmp_path, monkeypatch, missing):
     """两文件缺一 = 走下载路径；下载被断网桩拦住返回 False（不触发真实网络）。"""
 
-    def broken(url, path, reporthook=None):
+    def broken(url, dest):
         raise OSError("network down")
 
-    monkeypatch.setattr(asr_mod.urllib.request, "urlretrieve", broken)
+    monkeypatch.setattr(asr_mod, "_http_download", broken)
     if missing != "model":
         (tmp_path / "model.int8.onnx").write_bytes(b"x")
     if missing != "tokens":
