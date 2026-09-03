@@ -51,7 +51,7 @@ class Spine:
         config = config or load_config()
         self.brain = brain or Brain()
         self.vision = vision or Vision()
-        self.listen = listen or Listen()
+        self.listen = listen or Listen(config=config)  # config 选 ASR 引擎（照 Mouth 模式）
         self.mouth = mouth or Mouth(config)
         # 退出回调由装配层（main）注入 app.quit——spine 零 Qt 依赖的红线靠它保住
         self._quit_app = quit_app

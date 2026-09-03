@@ -3,12 +3,12 @@ import time
 from collections import deque
 from pathlib import Path
 
-import ctranslate2
 import numpy as np
 import onnxruntime as ort
 import sounddevice as sd
-from faster_whisper import WhisperModel
 from PyQt5.QtCore import QObject, pyqtSignal
+
+from asr import create_asr
 
 # 句间监听窗口：打断需活动度确认——最近 10 块（320ms）中 ≥8 块活跃才算用户说话。
 # 真机实测：播放"呜哇！"后余响尖峰仅 160ms（5 块）连续，不足以触发确认；
@@ -52,6 +52,63 @@ def segment_contaminated(playing_flags) -> bool:
     return any(playing_flags)
 
 
+# ---- 音频三小修（2026-09-03，引擎无关的采集侧增强；纯函数/纯类便于单测）----
+
+# pre-roll 环形缓冲块数：7 块 ≈ 224ms @512帧/16kHz。VAD 触发判定需要能量爬坡，
+# 触发那刻话音往往已说了一两百毫秒——没有 pre-roll 首字/半字被切，识别白白丢分
+PRE_ROLL_CHUNKS = 7
+# 裁尾保留块数：留 ~96ms 自然停顿感；其余尾部静音裁掉（静音段是转写幻觉温床）
+TRIM_KEEP_CHUNKS = 3
+
+
+class PreRollBuffer:
+    """触发前音频的环形缓冲：VAD 触发那刻之前的话音（首字前导）不丢失。
+
+    只收非回声块（嘴在播且监听窗口未开时不收）——防回声期块混进下一段录音
+    开头，绕过 segment_contaminated 的播放标志判定。
+    drain() 取走并清空：触发即消费，缓冲不跨段残留。
+    """
+
+    def __init__(self, max_chunks=PRE_ROLL_CHUNKS):
+        self._buf = deque(maxlen=max_chunks)
+
+    def append(self, chunk, playing=False):
+        self._buf.append((chunk, playing))
+
+    def drain(self):
+        chunks = [c for c, _ in self._buf]
+        playing_flags = [p for _, p in self._buf]
+        self._buf.clear()
+        return chunks, playing_flags
+
+
+def trim_trailing_silence(chunks, scores, threshold=0.5, keep=TRIM_KEEP_CHUNKS):
+    """裁掉录音尾部的连续静音块，保留 keep 块自然停顿。
+
+    录音以连续静音 MAX_SILENCE(1.5s) 收尾才判"说完"，这 1.5s 静音如果一起送
+    转写，是幻觉的温床（模型对无内容段容易编造"谢谢观看"类文本）。按录音期
+    记录的逐块 VAD 分数，把尾部低于阈值的块全部裁掉、只留 keep 块——既消灭
+    幻觉温床，又保留自然停顿的听感特征。scores 与 chunks 一一对应。
+    """
+    end = len(chunks)
+    while end > 0 and scores[end - 1] < threshold:
+        end -= 1
+    end = min(len(chunks), end + keep)
+    return chunks[:end]
+
+
+def boost_if_quiet(audio, peak_threshold=0.25, target=0.5):
+    """小音量增益：整段峰值低于阈值才等比放大到目标（保守规则）。
+
+    原理：远场麦克风/系统音量低时录到的信号峰值可能只有 0.1x，转写特征
+    提取偏弱。只在"确实很小声"时放大——正常音量不动，避免把底噪一起抬起来。
+    """
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if 0.0 < peak < peak_threshold:
+        return audio * (target / peak)
+    return audio
+
+
 class SileroVadOnnx:
     """直接调用 silero_vad.onnx 打分，不依赖 torch。
 
@@ -89,9 +146,14 @@ class Listen(QObject):
     text_signal = pyqtSignal(str)  # 只是信号通道，不是消息缓存。
     interrupt_requested = pyqtSignal()  # 句间监听窗口内 VAD 触发 = 用户说话 → 主控立即打断
 
-    def __init__(self, history_length=5):
+    def __init__(self, history_length=5, config=None, asr_engine=None):
         super().__init__()
         self.listen_history = deque(maxlen=history_length)
+        # ASR 引擎可注入（测试用）；生产路径从 config.toml 经工厂装配
+        # （ASR_BACKEND 选 SenseVoice/Whisper，缺模型自动下载/回退，见 asr.py）
+        self.asr = asr_engine or create_asr(config)
+        # pre-roll 环形缓冲：VAD 触发前的音频块，触发时前置进录音段保首字
+        self.pre_roll = PreRollBuffer()
         # 回声门控：嘴器官引用（ui 装配）。朗读期间麦克风拾到的语音视为回声丢弃，
         # 门控状态由 Mouth 内部管理（speaking 会话 + window_open 句间监听窗口），
         # 耳只读不写
@@ -118,20 +180,6 @@ class Listen(QObject):
 
         # 加载 Silero VAD（ONNX 本地模型，无需 torch、无需联网下载）
         self.vad = SileroVadOnnx(self.SAMPLE_RATE)
-
-        # 加载whisper：有 CUDA 用 GPU，否则回退 CPU int8
-        if ctranslate2.get_cuda_device_count() > 0:
-            device, compute_type = "cuda", "float16"
-        else:
-            device, compute_type = "cpu", "int8"
-        print(f"Whisper 推理设备：{device} ({compute_type})")
-        try:
-            # 优先离线加载本地缓存：在线模式即使模型已缓存也会先连 HF 校验，
-            # 网络不通时会卡死在 TCP 连接上
-            self.whisper_model = WhisperModel("small", device=device, compute_type=compute_type, local_files_only=True)
-        except Exception:
-            print("本地未找到 Whisper 模型缓存，转为在线下载...")
-            self.whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
 
         self.start_threading()
 
@@ -204,18 +252,21 @@ class Listen(QObject):
         MAX_CHUNKS = 470  # 最长录音约 15 秒，防止缓冲无限增长
         echo_ignored = False  # 正在忽略回声（防每 32ms 重复打印）
         while True:
-            voice_buffer = []
             raw_bytes, _overflowed = self.stream.read(self.CHUNK)
             audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
             # 模型打分
             score = self.vad(audio_f32)
             # 句间监听窗口：开窗重置 VAD / 活动度累积 / 冷却 / 打断
             self._window_tick(score)
+            # 回声期的块不进 pre-roll（防回声混进下一段开头绕过污染判定）
+            is_echo_now = should_drop_echo(self._speaking, self._window_open)
+            if not is_echo_now:
+                self.pre_roll.append(audio_f32, self.mouth.playing if self.mouth is not None else False)
             if score >= 0.5:
                 # 句间监听窗口方案：句子播放中/余响静默期（speaking 且窗口未开）→
                 # 拾到的必是扬声器回声，忽略（不 reset VAD、不录音，继续读流保持同步）；
                 # 窗口期 → 录音（打断由活动度确认触发）
-                if should_drop_echo(self._speaking, self._window_open):
+                if is_echo_now:
                     if not echo_ignored:
                         print("检测到 TTS 播放回声，忽略")
                         echo_ignored = True
@@ -223,8 +274,12 @@ class Listen(QObject):
                 echo_ignored = False
                 print("检测到声音了，开始录音...")
                 self.vad.reset()  # 每段录音前重置 VAD 状态
-                voice_buffer.append(audio_f32)
-                playing_flags = []  # 逐块记录：录音段是否叠着 TTS 播放
+                # pre-roll 前置（保首字）：触发前 ~224ms 的干净块接在本段开头；
+                # 这些块在 VAD 阈值下（分数记 0.0），只参与识别不参与静音判定
+                pre_chunks, pre_playing = self.pre_roll.drain()
+                voice_buffer = pre_chunks + [audio_f32]
+                chunk_scores = [0.0] * len(pre_chunks) + [score]
+                playing_flags = pre_playing + [self.mouth.playing if self.mouth is not None else False]
                 while silence_timeout < MAX_SILENCE and len(voice_buffer) < MAX_CHUNKS:
                     raw_bytes, _overflowed = self.stream.read(self.CHUNK)
                     audio_f32 = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
@@ -235,7 +290,9 @@ class Listen(QObject):
                     # 窗口期活动度继续累积（打断确认可能发生在录音中）
                     self._window_tick(score)
 
-                    playing_flags.append(self.mouth.playing if self.mouth is not None else False)
+                    playing = self.mouth.playing if self.mouth is not None else False
+                    playing_flags.append(playing)
+                    chunk_scores.append(score)
 
                     if score < 0.5:
                         silence_timeout += 1
@@ -251,9 +308,13 @@ class Listen(QObject):
                     print("录音段叠着 TTS 播放，丢弃（疑似回声）")
                     continue
                 print("录音结束，正在转写...")
-                complete_audio_np = np.concatenate(voice_buffer) if voice_buffer else np.zeros(0, dtype=np.float32)
-                # 交给 Whisper 转写（float32 原始信号；窗口期录音已无播放混叠）
-                segments, info = self.whisper_model.transcribe(complete_audio_np, beam_size=5, language="zh")
-                transed_text = "".join([segment.text for segment in segments])
+                # 三小修后两步：裁掉尾部静音（幻觉温床）→ 小音量增益；
+                # （第一步 pre-roll 已在触发时前置）
+                voice_buffer = trim_trailing_silence(voice_buffer, chunk_scores)
+                if not voice_buffer:
+                    continue
+                complete_audio_np = boost_if_quiet(np.concatenate(voice_buffer))
+                # 交给 ASR 引擎转写（float32 原始信号；窗口期录音已无播放混叠）
+                transed_text = self.asr.transcribe(complete_audio_np, self.SAMPLE_RATE)
                 if transed_text.strip():
                     self.get_voice_text(transed_text)

@@ -5,7 +5,16 @@
 纯函数提取照 astrbot.py 的 should_observe 模式（便于单测），录音主循环只在关键点调用。
 """
 
-from listen import segment_contaminated, should_drop_echo, window_interrupt_confirmed
+import numpy as np
+
+from listen import (
+    PreRollBuffer,
+    boost_if_quiet,
+    segment_contaminated,
+    should_drop_echo,
+    trim_trailing_silence,
+    window_interrupt_confirmed,
+)
 
 
 class TestWindowInterruptConfirmed:
@@ -73,3 +82,63 @@ class TestSpeakingSessionResetsLatches:
         assert lis._interrupt_sent is False
         assert lis._interrupt_cooldown_until == 0.0
         assert len(lis._window_activity) == 0
+
+
+# ---------- 音频三小修（2026-09-03） ----------
+
+
+class TestPreRollBuffer:
+    def test_drain_returns_chunks_and_flags_in_order(self):
+        buf = PreRollBuffer()
+        buf.append("a", False)
+        buf.append("b", True)
+        chunks, playing = buf.drain()
+        assert chunks == ["a", "b"]
+        assert playing == [False, True]
+
+    def test_drain_clears(self):
+        buf = PreRollBuffer()
+        buf.append("a", False)
+        buf.drain()
+        assert buf.drain() == ([], [])
+
+    def test_capacity_keeps_latest(self):
+        buf = PreRollBuffer(max_chunks=2)
+        for i in range(4):
+            buf.append(f"c{i}", False)
+        chunks, _ = buf.drain()
+        assert chunks == ["c2", "c3"]  # 只留最近 2 块（环形语义）
+
+
+class TestTrimTrailingSilence:
+    def test_strips_tail_keeps_pause(self):
+        chunks = ["s1", "s2", "q1", "q2", "q3", "q4"]
+        scores = [0.9, 0.8, 0.1, 0.1, 0.1, 0.1]
+        # 尾部 4 块静音裁掉，保留 3 块停顿 → 到 s2 后 3 块（q1..q3）
+        assert trim_trailing_silence(chunks, scores) == ["s1", "s2", "q1", "q2", "q3"]
+
+    def test_all_silent_keeps_min(self):
+        chunks = ["a", "b"]
+        scores = [0.1, 0.1]
+        assert trim_trailing_silence(chunks, scores, keep=1) == ["a"]
+
+    def test_loud_tail_untouched(self):
+        chunks = ["a", "b"]
+        scores = [0.1, 0.9]
+        assert trim_trailing_silence(chunks, scores) == ["a", "b"]
+
+
+class TestBoostIfQuiet:
+    def test_quiet_audio_scaled_up(self):
+        audio = np.ones(100, dtype=np.float32) * 0.1  # 峰值 0.1 < 0.25
+        boosted = boost_if_quiet(audio)
+        assert abs(float(np.max(boosted)) - 0.5) < 1e-6
+        assert abs(boosted[0] - 0.5) < 1e-6  # 等比放大，波形不变
+
+    def test_normal_audio_untouched(self):
+        audio = np.ones(100, dtype=np.float32) * 0.7
+        assert boost_if_quiet(audio) is audio  # 正常音量原样返回（不复制不放大）
+
+    def test_silence_untouched(self):
+        audio = np.zeros(100, dtype=np.float32)
+        assert boost_if_quiet(audio) is audio  # 全静音不放大（防抬底噪）
