@@ -160,8 +160,8 @@ onebot_bridge.py  # OneBot 11 反向 WS 伪装客户端（事件上报/动作响
 tts.py         # 语音输出：TTS 抽象 + SiliconFlow（默认）/ CosyVoice2（未完成）/ Dummy
 vision.py      # 截屏（Wayland PipeWire → gnome-screenshot → X11 ImageGrab）
 listen.py      # VAD 语音检测 + Whisper 转写
-skin.py        # 外观器官（皮）：贴图、气泡、输入框、动画、拖动/双击输入
-spine.py       # 主控中枢（脊髓）：器官装配、消息队列、判定、回复编排
+skin.py        # 外观器官（皮）：贴图、气泡、输入框、动画、拖动/双击/右键输入、系统托盘与退出
+spine.py       # 主控中枢（脊髓）：器官装配、消息队列、判定、回复与退出编排
 pw_capture.py  # Wayland 静默截屏后端（ScreenCast Portal + PipeWire + GStreamer）
 assets/        # 贴图 + VAD 模型 + 音色参考音频
 tests/         # pytest 用例

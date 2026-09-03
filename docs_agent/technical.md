@@ -48,9 +48,14 @@ class BackendResponse:
 | 器官 | 命令（被主控调） | 状态/信号（对外） |
 |---|---|---|
 | 耳 listen | `listen.mouth = mouth`（单向只读注入） | `text_signal(str)`、`interrupt_requested` |
-| 嘴 mouth | `async speak(text)`、`async interrupt() -> 前缀` | `busy` / `speaking` / `playing` / `window_open`、`finished` |
+| 嘴 mouth | `async speak(text)`、`async interrupt() -> 前缀`、`async stop()`（退出收尾） | `busy` / `speaking` / `playing` / `window_open`、`finished` |
 | 眼 vision | `look_at_screen()`（内部多后端回退） | — |
-| 皮 skin | `show_bubble(text, timeout_ms)` / `hide_bubble()` / `set_anim_state(state)` | `text_submitted(str)`、`touched` |
+| 皮 skin | `show_bubble(text, timeout_ms)` / `hide_bubble()` / `set_anim_state(state)` | `text_submitted(str)`、`touched`、`quit_requested` |
+
+- **退出编排**（2026-09-03）：皮 `quit_requested`（托盘/右键菜单「退出」广播）→
+  `spine._shutdown()`（幂等闩）：`brain.stop()`（结算桥在飞请求）→ `mouth.stop()`
+  （停朗读 + TTS close）→ `quit_app()`（main 注入 `app.quit`，spine 零 Qt）。
+  窗口带 `Qt.Tool`（不进任务栏/Alt-Tab）。
 
 - TTS 抽象（tts.py）：`async speak(text)` / `async interrupt() -> str` / `busy` / `playing` /
   `close()`；`sentence_done_callback` 钩子驱动句间监听窗口（Mouth._sentence_gap）。
