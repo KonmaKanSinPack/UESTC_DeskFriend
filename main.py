@@ -22,7 +22,10 @@ if __name__ == "__main__":
     asyncio.set_event_loop(loop)  # 设置异步事件循环
 
     face = Skin()  # 外观器官（窗口本体）
-    # quit_app 桥接 Qt↔spine 的唯一交点：收摊顺序归 spine 编排，退出循环由 Qt 侧执行
+    # quit_app 是 Qt↔spine 的唯一交点：spine 若直接 import QApplication 调 quit()，
+    # 会破坏「主控零 Qt」架构红线（test_spine 也得拉起 Qt 才能跑）。所以由装配层
+    # 在这里注入 app.quit 回调——spine 收摊完器官后调它，qasync loop 随下方
+    # `with loop:` 正常关闭。
     spine = Spine(face=face, quit_app=app.quit)  # 主控中枢：内部装配 brain/vision/listen/mouth 并接线
     spine.start()  # 起消费者任务（loop 已 set 未 run，走 get_event_loop 回退分支）
     face.show()

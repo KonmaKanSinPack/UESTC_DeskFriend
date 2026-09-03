@@ -131,10 +131,14 @@ class Mouth(QObject):
     async def stop(self):
         """命令：退出前收尾——打断在播朗读并释放 TTS 资源。
 
-        幂等：interrupt 在空闲态安全（后端有 _busy 守卫）；close 为释放钩子
-        （ABC 默认空操作）。顺序：先停声再释放，避免资源先撤导致播放报错。
+        原理：interrupt() 先置位 _gap_abort（卡在句间监听窗口的后端线程立即醒、
+        窗口立刻关，不拖满 0.6s），再由 TTS 后端置 _stop_event + sd.stop() 立即
+        停声；空闲态调用也安全（后端 interrupt 有 `_busy` 守卫，无播放直接返回）。
+        close() 是资源释放钩子（TTS 抽象基类默认空操作，为将来本地模型后端的
+        显存/线程池释放留的缝）。顺序必须先停声再释放——反过来在播线程可能
+        访问已释放的资源。幂等：重复调用无副作用。
         """
-        await self.interrupt()  # 同时置位 _gap_abort：句间窗口立即关，不拖满监听窗
+        await self.interrupt()
         await self.tts.close()
 
     @property

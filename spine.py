@@ -59,12 +59,27 @@ class Spine:
     # ---------- 退出编排 ----------
 
     def _on_quit_requested(self):
-        """皮信号入口（托盘/右键「退出」）：把收摊协程挂到 loop（同 on_heard_text 模式）。"""
+        """皮信号入口（托盘/右键「退出」）：把收摊协程挂到 loop（同 on_heard_text 模式）。
+
+        不能在信号槽里直接 await——Qt 信号槽是同步调用栈，这里只负责把协程
+        create_task 交给 qasync 主 loop，真正的收摊在协程里异步进行。
+        """
         asyncio.get_event_loop().create_task(self._shutdown())
 
     async def _shutdown(self):
-        """按资源依赖序收摊：先脑（结算桥在飞请求/取消观察循环）→ 再嘴（停朗读/释放 TTS）
-        → 最后交装配层退出事件循环。幂等：重复的退出请求直接忽略。"""
+        """按资源依赖序收摊：脑 → 嘴 → 退出事件循环。幂等：重复请求直接忽略。
+
+        为什么是这个顺序（反了会怎样）：
+        1. brain.stop() 必须最先——OneBot 桥要结算在飞请求（等回复中的对话、屏幕
+           观察循环取消）。若先退出 Qt 循环，qasync loop 一关这些协程直接蒸发，
+           AstrBot 侧留下半截会话。
+        2. mouth.stop() 其次——打断在播朗读（否则声音会一直播到进程真正死亡），
+           并给 TTS 一次释放资源的机会。
+        3. quit_app() 最后——它是 main 注入的 app.quit 回调：spine 若直接 import
+           QApplication 就破坏「主控零 Qt」红线（单测也得拉起 Qt），所以退出循环
+           这个动作交回装配层执行；app.quit 后 main 的 `with loop:` 正常关闭。
+        复现：新增器官需要在退出时收尾的，按依赖序在本方法追加一行 stop。
+        """
         if self._shutting_down:
             return
         self._shutting_down = True

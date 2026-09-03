@@ -109,21 +109,29 @@ class Skin(QWidget):
             self.label.setPixmap(pixmap)
 
     def _init_tray(self):
-        """系统托盘：常驻形象入口 + 退出。
+        """系统托盘：桌宠的常驻退出入口（Qt.Tool 后任务栏不再有窗口按钮，托盘成为主入口）。
 
-        isSystemTrayAvailable 不可用（精简 Linux 等）时静默跳过——右键菜单仍是
-        退出兜底。triggered 信号带 checked 参数，桥到无参 emit 用 lambda。
+        原理：QSystemTrayIcon 把图标注册进系统托盘区，setContextMenu 后系统在
+        图标右键时弹出菜单。菜单项的 triggered 信号会带 checked 参数，而本类广播的
+        quit_requested 是无参信号——直连会 TypeError，所以用 lambda 丢弃参数再 emit
+        （复现：以后加「静音 TTS」等菜单项，照抄这条 connect 写法即可）。
+        isSystemTrayAvailable() 为假（精简 Linux / 无壳环境）时静默跳过，不报错——
+        桌宠右键菜单仍是等价退出兜底，两条入口广播同一个信号。
         """
         self.tray = QSystemTrayIcon(self._tray_icon(), self)
         self.tray.setToolTip("桃桃 (UESTC_DeskFriend)")
-        menu = QMenu(self)  # 挂父对象防 GC；菜单仅「退出」，扩展项留后续轮
+        menu = QMenu(self)  # 挂父对象：没有引用的 QMenu 会被 Python GC 回收，菜单弹出即消失
         menu.addAction("退出").triggered.connect(lambda: self.quit_requested.emit())
         self.tray.setContextMenu(menu)
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
 
     def _tray_icon(self):
-        """托盘图标：贴图缩略（GIF 取当前帧，QIcon 自适配托盘尺寸）；无贴图回退系统图标。"""
+        """托盘图标三级回退：GIF 当前帧 → 静态贴图 → 系统占位图标。
+
+        QIcon 持有各尺寸位图、由系统自选（Windows 托盘约 16×16），无需手动缩放；
+        只在两极都拿不到图（贴图路径配错）时才落到 SP_ComputerIcon，保证托盘永不缺位。
+        """
         movie = getattr(self, "movie", None)  # GIF 分支才有 movie 属性
         if movie is not None:
             return QIcon(QPixmap.fromImage(movie.currentImage()))
@@ -190,7 +198,13 @@ class Skin(QWidget):
             return True
         return super().eventFilter(obj, event)
 
-    def contextMenuEvent(self, event):  # 鼠标右键：退出菜单（与托盘同款，只广播）
+    def contextMenuEvent(self, event):
+        """右键菜单：与托盘同款退出入口，同样只广播信号。
+
+        原理：Windows 上右键释放时 Qt 自动合成 ContextMenu 事件（与 mousePressEvent
+        里只处理 LeftButton 的分支互不干扰，无需在 mouse 事件里判右键）。menu.exec_
+        以模态方式运行到用户选中一项或点击别处才返回，期间不占 CPU。
+        """
         menu = QMenu(self)
         menu.addAction("退出").triggered.connect(lambda: self.quit_requested.emit())
         menu.exec_(event.globalPos())
