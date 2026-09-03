@@ -9,7 +9,9 @@
 
 ```
 main.py        装配入口（onnxruntime 预载 → QApplication+qasync → Skin+Spine）
-spine.py       主控中枢 Spine（plain class）：接线六条 + 消息队列 + should_reply + do_response
+spine.py       主控中枢 Spine（plain class）：接线七条（listen.mouth 注入、interrupt_requested、
+               text_signal、text_submitted、touched、quit_requested、brain.observe_sink）
+               + 消息队列（(source, text) 分流）+ should_reply + do_response
 brain.py       Brain 门面：统一契约转发后端 + pack_msg/parse_tool_args 纯函数
 backends/      base.py（契约）/ __init__.py（工厂+create_judge）/ astrbot.py / openai.py / judger.py
 onebot_bridge.py  OneBot 11 反向 WS 伪装客户端
@@ -34,6 +36,7 @@ class BackendResponse:
     content: str
     tool_calls: list[ToolCall] = []
     answered: bool = True   # False = 桥超时兜底文案 → spine 只显示不朗读（防回声环）
+    speak: bool = True      # False = 只显示不朗读（主动观察空闲期：仅活跃期朗读，2026-09-03）
 ```
 
 - 工厂 `create_backend(config)`：按 `BACKEND` 键装配（`astrbot` 默认 / `openai`）。
@@ -42,6 +45,12 @@ class BackendResponse:
 - **判定路由**（openai 后端，2026-08-14）：`get_response_with_context` 上下文首条 system ==
   `JUDGE_SYSTEM_PROMPT`（spine 构造，单一来源）→ 走 judge 通道，不进主对话流；
   记忆链路（摘要/抽取/合并）各有自己的提示词，不被误路由。
+- **主动观察统一消息流**（2026-09-03）：astrbot 后端观察门控通过后经 `observe_sink`
+  回调（Brain 门面 property → 后端属性）把观察文案交 spine 入队；消息队列元素为
+  `(source, text)`（`user`/`proactive`），consumer 只合并连续 user 源、proactive 独立
+  成条且跳过 should_reply（门控已在后端）。呈现统一走 `do_response`：空 content =
+  完全静默（后端对"无"类回复返回空串，仅主动观察会出现）；`speak=False` 只冒泡不朗读。
+  自发消息不更新用户时间窗、不消费打断标记（`PROACTIVE_MARKER` 前缀识别分支）。
 
 ## 3. 器官接口（对 spine 的边界）
 
