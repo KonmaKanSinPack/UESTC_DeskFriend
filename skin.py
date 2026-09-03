@@ -1,6 +1,6 @@
 """外观（皮）器官：与 mouth.py（嘴，发声）对称的纯物理层。
 
-职责：显示（贴图/气泡/动画）+ 触摸输入（点击/拖动/双击/文字输入）。
+职责：显示（贴图/气泡/动画/托盘）+ 触摸输入（点击/拖动/双击/右键/文字输入）。
 不知道大模型存在——show_bubble/set_anim_state 是主控中心（spine）的命令；
 text_submitted/touched 是向主控广播的信号（器官永远广播，主控决定用不用）。
 
@@ -13,8 +13,8 @@ from pathlib import Path
 
 import tomllib
 from PyQt5.QtCore import QPoint, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QMovie, QPixmap
-from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
+from PyQt5.QtGui import QIcon, QMovie, QPixmap
+from PyQt5.QtWidgets import QApplication, QLabel, QLineEdit, QMenu, QStyle, QSystemTrayIcon, QVBoxLayout, QWidget
 
 PROJECT_DIR = Path(__file__).parent
 SPRITE_WIDTH = 150  # 贴图统一缩放到这个宽度
@@ -31,15 +31,18 @@ class Skin(QWidget):
     # —— 信号（广播输入；skin 不知道谁会来听）——
     text_submitted = pyqtSignal(str)  # 回车发送的文字（空文本 strip 后不发）
     touched = pyqtSignal()  # 双击"触碰"彩蛋
+    quit_requested = pyqtSignal()  # 托盘/右键菜单「退出」：只广播，收摊编排归主控
 
     def __init__(self):
         super().__init__()
 
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # Qt.Tool：常驻桌宠不进任务栏与 Alt-Tab（无它会在任务栏占一个常驻位）
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)  # 设置透明背景
 
         self.label = QLabel(self)
         self._load_sprite()
+        self._init_tray()
 
         # 气泡：显示回复文本，平时隐藏
         self.bubble = QLabel(self)
@@ -105,6 +108,30 @@ class Skin(QWidget):
             pixmap = pixmap.scaledToWidth(SPRITE_WIDTH, Qt.SmoothTransformation)
             self.label.setPixmap(pixmap)
 
+    def _init_tray(self):
+        """系统托盘：常驻形象入口 + 退出。
+
+        isSystemTrayAvailable 不可用（精简 Linux 等）时静默跳过——右键菜单仍是
+        退出兜底。triggered 信号带 checked 参数，桥到无参 emit 用 lambda。
+        """
+        self.tray = QSystemTrayIcon(self._tray_icon(), self)
+        self.tray.setToolTip("桃桃 (UESTC_DeskFriend)")
+        menu = QMenu(self)  # 挂父对象防 GC；菜单仅「退出」，扩展项留后续轮
+        menu.addAction("退出").triggered.connect(lambda: self.quit_requested.emit())
+        self.tray.setContextMenu(menu)
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray.show()
+
+    def _tray_icon(self):
+        """托盘图标：贴图缩略（GIF 取当前帧，QIcon 自适配托盘尺寸）；无贴图回退系统图标。"""
+        movie = getattr(self, "movie", None)  # GIF 分支才有 movie 属性
+        if movie is not None:
+            return QIcon(QPixmap.fromImage(movie.currentImage()))
+        pixmap = self.label.pixmap()
+        if pixmap is not None and not pixmap.isNull():
+            return QIcon(pixmap)
+        return QApplication.style().standardIcon(QStyle.SP_ComputerIcon)
+
     # ---------- 命令（被主控命令；skin 不知道命令来自谁） ----------
 
     def show_bubble(self, text, timeout_ms=10000):
@@ -162,6 +189,12 @@ class Skin(QWidget):
             self.adjustSize()
             return True
         return super().eventFilter(obj, event)
+
+    def contextMenuEvent(self, event):  # 鼠标右键：退出菜单（与托盘同款，只广播）
+        menu = QMenu(self)
+        menu.addAction("退出").triggered.connect(lambda: self.quit_requested.emit())
+        menu.exec_(event.globalPos())
+        event.accept()
 
     def mouseDoubleClickEvent(self, event):  # 鼠标双击时
         if event.button() == Qt.LeftButton:
