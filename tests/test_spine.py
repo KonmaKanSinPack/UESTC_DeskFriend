@@ -211,7 +211,7 @@ def test_text_submitted_interrupts_and_queues():
         spine.start()
         spine._on_text_submitted("你好")
         assert spine.message_queue.qsize() == 1
-        assert ("听到了，正在想…", 60000) in face.bubbles
+        assert ("你好", 60000) in face.bubbles  # 受理气泡显示原文（听对没一眼可见）
         assert "thinking" in face.anim_states
         await asyncio.sleep(0.05)
         assert mouth.interrupt_count == 1

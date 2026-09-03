@@ -209,7 +209,9 @@ class Spine:
         self._interrupt_tts()  # 打断朗读，记录打断位置
         try:
             self.message_queue.put_nowait((USER_SOURCE, text))  # 忙碌时也入队，等消费者空闲后处理
-            self.face.show_bubble("听到了，正在想…", timeout_ms=60000)
+            # 受理气泡直接显示转写原文（60s 兜底，回复到达即覆盖）：用户立刻知道
+            # "听对了没"——听错可马上重说，感知等待远短于只显示"正在想…"
+            self.face.show_bubble(text, timeout_ms=60000)
             self.face.set_anim_state("thinking")
         except asyncio.QueueFull:
             print("消息队列已满，丢弃这条消息。")
@@ -220,7 +222,7 @@ class Spine:
         self._interrupt_tts()  # 打断朗读，记录打断位置
         try:
             self.message_queue.put_nowait((USER_SOURCE, text))
-            self.face.show_bubble("听到了，正在想…", timeout_ms=60000)
+            self.face.show_bubble(text, timeout_ms=60000)  # 显示原文确认受理（与听觉入口一致）
             self.face.set_anim_state("thinking")
         except asyncio.QueueFull:
             print("消息队列已满，丢弃这条消息。")

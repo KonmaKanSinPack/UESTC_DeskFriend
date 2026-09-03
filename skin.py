@@ -18,6 +18,13 @@ from PyQt5.QtWidgets import QApplication, QLabel, QLineEdit, QMenu, QStyle, QSys
 
 PROJECT_DIR = Path(__file__).parent
 SPRITE_WIDTH = 150  # 贴图统一缩放到这个宽度
+# 动画帧率分档（2026-09-03 流畅性轮）：idle 呼吸是慢正弦，8fps 视觉无差、CPU 降 ~2/3
+# （动整窗的分层窗口每帧都触发 DWM 全窗 alpha 重合成，是最贵的动画路径——帧率即电费）；
+# thinking 晃动 / talking 弹跳动作快，保 25fps
+ANIM_INTERVAL_IDLE = 125  # ms ≈ 8fps
+ANIM_INTERVAL_ACTIVE = 40  # ms = 25fps
+# 相位步进按毫秒等比：原实现 0.12/帧 @40ms，换帧率后保持同一节奏（否则 idle 下呼吸会变慢 3 倍）
+ANIM_PHASE_PER_MS = 0.12 / 40
 
 
 def load_config():
@@ -86,7 +93,7 @@ class Skin(QWidget):
         self._just_double_clicked = False
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self._anim_tick)
-        self.anim_timer.start(40)  # 25fps
+        self.anim_timer.start(ANIM_INTERVAL_IDLE)  # 起始即 idle 档
 
     def _load_sprite(self):
         """从 config.toml 的 SPRITE 加载贴图，支持静态图与 GIF 动图。"""
@@ -153,14 +160,23 @@ class Skin(QWidget):
         self.bubble.hide()
         self.bubble_timer.stop()
         self.adjustSize()
-        self._anim_state = "idle"
+        self._apply_anim_state("idle")
 
     def set_anim_state(self, state):
         """语义级命令："idle" 待机呼吸 / "thinking" 思考晃动 / "talking" 说话弹跳。
 
         渲染方式（整窗微动 / 未来 Live2D）是皮肤内部细节。
         """
+        self._apply_anim_state(state)
+
+    def _apply_anim_state(self, state):
+        """状态即帧率档：帧率跟状态一起切（QTimer.setInterval 不重置计时，安全）。
+
+        原理/复现：idle 呼吸是周期 ~2s 的慢正弦，8fps 采样视觉无差；换挡的依据
+        是"动作频率"——晃动/弹跳的位移变化快，降帧会肉眼可见卡顿，故保 25fps。
+        """
         self._anim_state = state
+        self.anim_timer.setInterval(ANIM_INTERVAL_IDLE if state == "idle" else ANIM_INTERVAL_ACTIVE)
 
     # ---------- 内部：外观细节自管理 ----------
 
@@ -181,7 +197,8 @@ class Skin(QWidget):
         if self._base_pos is None:
             self._base_pos = self.pos()
             return
-        self._anim_phase += 0.12
+        # 相位按真实毫秒推进（0.003/ms）：帧率分档后各档节奏一致（呼吸周期不变）
+        self._anim_phase += ANIM_PHASE_PER_MS * self.anim_timer.interval()
         if self._anim_state == "thinking":
             offset = QPoint(round(3 * math.sin(self._anim_phase * 4)), 0)  # 快速晃动
         elif self._anim_state == "talking":

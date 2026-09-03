@@ -248,7 +248,10 @@ class Listen(QObject):
     def during_listening(self):
         silence_timeout = 0
         # 每块 512 帧 @16kHz ≈ 32ms
-        MAX_SILENCE = 45  # 连续静音约 1.5 秒视为说完
+        # 连续静音 1.0s 判"说完"（2026-09-03 流畅性轮 1.5s→1.0s，行业典型 0.7~1.0s）。
+        # 早年 640ms 曾把说话停顿截断——现在安全得多：截出来的后半句会作为新消息入队，
+        # 被 consumer 与前半段 "\n" 合并成一条送脑，不再丢内容
+        MAX_SILENCE = 30
         MAX_CHUNKS = 470  # 最长录音约 15 秒，防止缓冲无限增长
         echo_ignored = False  # 正在忽略回声（防每 32ms 重复打印）
         while True:
