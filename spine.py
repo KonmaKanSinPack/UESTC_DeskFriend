@@ -12,9 +12,10 @@ import asyncio
 
 from backends.judger import JUDGE_SYSTEM_PROMPT
 from brain import Brain, pack_msg, parse_tool_args
+from config_loader import load_config
 from listen import Listen
 from mouth import Mouth
-from skin import Skin, load_config
+from skin import Skin
 from vision import Vision
 
 # 消息来源标记：队列元素 (source, text) 的 source 值。

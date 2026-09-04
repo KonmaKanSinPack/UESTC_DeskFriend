@@ -6,15 +6,14 @@
 
 import json
 
-import tomllib
 from openai import AsyncOpenAI
 
-from memory import KEEP_RECENT_TURNS, MAX_CONTEXT_TURNS, MemoryStore, render_messages
+from memory import MemoryStore, render_messages
 
 from .base import BackendResponse, ReplyBackend, ToolCall
 from .judger import JUDGE_SYSTEM_PROMPT, _extract_judge_text
 
-# 默认人设：糯糯（Q版弗洛洛毛绒玩偶）。可在 config.toml 用 SYSTEM_PROMPT 覆盖。
+# 默认人设：糯糯（Q版弗洛洛毛绒玩偶）。可在 config/openai.toml 用 SYSTEM_PROMPT 覆盖。
 DEFAULT_SYSTEM_PROMPT = (
     "你是糯糯，一只Q版弗洛洛毛绒玩偶形态的桌面AI伙伴，住在用户的电脑桌面上。"
     "用中文回复，语气软萌、自然、像朋友闲聊，回复要简短（一两句话），"
@@ -30,8 +29,11 @@ SUMMARY_SYSTEM_PROMPT = (
 
 # 事实抽取：每次回复后处理自上次抽取以来的全部轮次（含背景谈话）
 FACT_EXTRACTION_MAX_TURNS = 20
-# facts 条数上限，超过后由 LLM 合并压缩到 MERGED_FACTS_TARGET 条
-MAX_FACTS = 50
+# 记忆阈值默认值（策略 owner 在本模块；可被 config 的 MEMORY_* 键经工厂覆盖——
+# 调记忆长度不用改代码。2026-09-04 从 memory.py 迁来：那里定义了自己不用的常量）
+DEFAULT_MAX_CONTEXT_TURNS = 30  # 未压缩轮次上限，超过触发摘要压缩
+DEFAULT_KEEP_RECENT_TURNS = 10  # 压缩时保留最近 N 轮原文
+DEFAULT_MAX_FACTS = 50  # facts 条数上限，超过后由 LLM 合并压缩到 MERGED_FACTS_TARGET 条
 MERGED_FACTS_TARGET = 30
 
 FACT_EXTRACTION_SYSTEM_PROMPT = (
@@ -69,11 +71,30 @@ def parse_fact_ops(raw):
 class OpenAIBackend(ReplyBackend):
     name = "openai"
 
-    def __init__(self, client=None, db_path=None, system_prompt=None, judge=None):
-        """client / db_path / system_prompt / judge 可注入，仅供测试；生产路径从 config.toml 构建。"""
+    def __init__(
+        self,
+        client=None,
+        db_path=None,
+        system_prompt=None,
+        judge=None,
+        config=None,
+        max_context_turns=DEFAULT_MAX_CONTEXT_TURNS,
+        keep_recent_turns=DEFAULT_KEEP_RECENT_TURNS,
+        max_facts=DEFAULT_MAX_FACTS,
+    ):
+        """client / db_path / system_prompt / judge / config 可注入，仅供测试。
+
+        生产路径：config 由 create_backend 传入（分层合并后的 dict；缺省时自行
+        load_config）——2026-09-04 起配置统一走工厂，不再自己偷读文件。
+        记忆阈值经 MEMORY_* 配置键覆盖，默认值见模块头常量。
+        """
+        self.max_context_turns = max_context_turns
+        self.keep_recent_turns = keep_recent_turns
+        self.max_facts = max_facts
         if client is None:
-            with open("config.toml", "rb") as f:
-                config = tomllib.load(f)
+            from config_loader import load_config
+
+            config = config or load_config()
             # timeout 显式放宽：SDK 默认 connect=5s，部分网关（如 MiniMax）连接+响应 9~12s 会稳定超时
             client = AsyncOpenAI(api_key=config["API_KEY"], base_url=config["BASE_URL"], timeout=60.0, max_retries=1)
             system_prompt = config.get("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
@@ -208,9 +229,9 @@ class OpenAIBackend(ReplyBackend):
     async def maybe_compress(self):
         """未压缩轮次超限时，把最老轮次增量并入滚动摘要。自身吞掉异常，绝不影响对话。"""
         try:
-            if self.memory.unsummarized_turn_count() <= MAX_CONTEXT_TURNS:
+            if self.memory.unsummarized_turn_count() <= self.max_context_turns:
                 return
-            turn_ids, old_msgs = self.memory.turns_to_summarize(KEEP_RECENT_TURNS)
+            turn_ids, old_msgs = self.memory.turns_to_summarize(self.keep_recent_turns)
             if not turn_ids:
                 return
             summary_context = [
@@ -284,7 +305,7 @@ class OpenAIBackend(ReplyBackend):
     async def _maybe_merge_facts(self):
         """facts 超上限时让 LLM 合并压缩；坏输出不落库，原表不动。"""
         facts = self.memory.get_facts()
-        if len(facts) <= MAX_FACTS:
+        if len(facts) <= self.max_facts:
             return
         merge_context = [
             {"role": "system", "content": FACT_MERGE_SYSTEM_PROMPT},

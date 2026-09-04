@@ -1,4 +1,4 @@
-"""回复后端工厂：按 config.toml 的 BACKEND 键装配实现（astrbot / openai）。
+"""回复后端工厂：按 config/ 分层配置的 BACKEND 键装配实现（astrbot / openai）。
 
 新增后端：在 backends/ 下实现 ReplyBackend 子类，这里加一个分支即可。
 
@@ -20,7 +20,7 @@ def create_judge(config):
     api_key = config.get("API_KEY")
     base_url = config.get("JUDGE_URL") or config.get("BASE_URL")
     if not api_key or not base_url:
-        print("判定器未配置：config.toml 缺少 API_KEY/JUDGE_URL（或 BASE_URL），判定回退为默认回复")
+        print("判定器未配置：config/ 配置缺少 API_KEY/JUDGE_URL（或 BASE_URL），判定回退为默认回复")
         return None
     try:
         # 懒加载：judger 本身零依赖，client 按需构建；缺 openai SDK 时优雅降级
@@ -64,7 +64,14 @@ def create_backend(config):
     if name == "openai":
         from .openai import OpenAIBackend  # 懒加载：openai 分支才需要 openai SDK
 
-        return OpenAIBackend()
+        # 配置显式经工厂传入（2026-09-04 前是裸构造让后端自己偷读文件）；记忆阈值
+        # MEMORY_* 可配，默认值在后端模块（策略 owner）
+        return OpenAIBackend(
+            config=config,
+            max_context_turns=config.get("MEMORY_MAX_TURNS", 30),
+            keep_recent_turns=config.get("MEMORY_KEEP_RECENT", 10),
+            max_facts=config.get("MEMORY_MAX_FACTS", 50),
+        )
     raise ValueError(f"未知 BACKEND: {name!r}（可选：astrbot / openai）")
 
 

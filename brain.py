@@ -3,15 +3,14 @@
 ui.py 依赖的契约（保持不变）：
 - Brain 五个方法：get_llm_response / get_response_with_context / memorize / maybe_compress / maybe_extract_facts
 - 工具函数：pack_msg / parse_tool_args
-具体"大脑"由 backends/ 按 config.toml 的 BACKEND 键选择（astrbot / openai），
+具体"大脑"由 backends/ 按 config/ 分层配置的 BACKEND 键选择（astrbot / openai），
 统一返回 BackendResponse（content + tool_calls），ui 不感知后端差异。
 """
 
 import json
 
-import tomllib
-
 from backends import BackendResponse, create_backend
+from config_loader import load_config
 
 
 def pack_msg(role, type, content, tool_call=None):
@@ -42,11 +41,9 @@ class Brain:
     """门面：按配置装配后端，原样转发五个接口；observe_sink 转发给有主动观察的后端。"""
 
     def __init__(self, backend=None):
-        """backend 可注入（测试用）；生产路径从 config.toml 经工厂创建。"""
+        """backend 可注入（测试用）；生产路径从 config/（分层合并）经工厂创建。"""
         if backend is None:
-            with open("config.toml", "rb") as f:
-                config = tomllib.load(f)
-            backend = create_backend(config)
+            backend = create_backend(load_config())
         self.backend = backend
 
     async def stop(self):

@@ -149,7 +149,7 @@ class Listen(QObject):
     def __init__(self, history_length=5, config=None, asr_engine=None):
         super().__init__()
         self.listen_history = deque(maxlen=history_length)
-        # ASR 引擎可注入（测试用）；生产路径从 config.toml 经工厂装配
+        # ASR 引擎可注入（测试用）；生产路径从 config/ 分层配置经工厂装配
         # （ASR_BACKEND 选 SenseVoice/Whisper，缺模型自动下载/回退，见 asr.py）
         self.asr = asr_engine or create_asr(config)
         # pre-roll 环形缓冲：VAD 触发前的音频块，触发时前置进录音段保首字

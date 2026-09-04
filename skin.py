@@ -11,7 +11,6 @@ set_anim_state 是语义级命令（"表达正在思考"），为渲染器替换
 import math
 from pathlib import Path
 
-import tomllib
 from PyQt5.QtCore import QPoint, QPropertyAnimation, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QMovie, QPixmap
 from PyQt5.QtWidgets import (
@@ -28,6 +27,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from config_loader import load_config
+
 PROJECT_DIR = Path(__file__).parent
 SPRITE_WIDTH = 150  # 贴图统一缩放到这个宽度
 # 动画帧率分档（2026-09-03 流畅性轮）：idle 呼吸是慢正弦，8fps 视觉无差、CPU 降 ~2/3
@@ -37,11 +38,6 @@ ANIM_INTERVAL_IDLE = 125  # ms ≈ 8fps
 ANIM_INTERVAL_ACTIVE = 40  # ms = 25fps
 # 相位步进按毫秒等比：原实现 0.12/帧 @40ms，换帧率后保持同一节奏（否则 idle 下呼吸会变慢 3 倍）
 ANIM_PHASE_PER_MS = 0.12 / 40
-
-
-def load_config():
-    with open(PROJECT_DIR / "config.toml", "rb") as f:
-        return tomllib.load(f)
 
 
 class Skin(QWidget):
@@ -145,7 +141,7 @@ class Skin(QWidget):
         self.anim_timer.start(ANIM_INTERVAL_IDLE)  # 起始即 idle 档
 
     def _load_sprite(self):
-        """从 config.toml 的 SPRITE 加载贴图，支持静态图与 GIF 动图。"""
+        """从 config/common.toml 的 SPRITE 加载贴图，支持静态图与 GIF 动图。"""
         sprite = load_config().get("SPRITE", "assets/nuonuo.png")
         sprite_path = Path(sprite)
         if not sprite_path.is_absolute():

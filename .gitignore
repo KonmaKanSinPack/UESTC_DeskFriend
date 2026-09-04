@@ -1,5 +1,6 @@
 .history
-config.toml
+config/*.toml
+!config/*.example.toml
 pw_restore_token
 __pycache__
 .venv

@@ -1,0 +1,36 @@
+# 复制为 config/common.toml——共享配置（两后端通用）
+# 回复后端选择：astrbot（默认）/ openai——决定加载 openai.toml 还是 astrbot.toml
+BACKEND = "astrbot"
+
+# ---- 判定器（should_reply 的 LLM 决策器，双后端共用）----
+# JUDGE_URL 独立端点（本地 LM Studio/Ollama 等，免费快速）；缺则回退 openai.toml 的 BASE_URL
+# API_KEY = "lm-studio"          # 判定器密钥（本地端点任意非空串）
+# JUDGE_URL = "http://127.0.0.1:1234/v1"
+# JUDGE_MODEL = "gemini-2.5-pro" # 按端点实际加载的模型填
+
+# ---- 记忆阈值（openai 后端；记忆长度不用改代码）----
+# MEMORY_MAX_TURNS = 30       # 未压缩轮次上限，超过触发摘要压缩
+# MEMORY_KEEP_RECENT = 10     # 压缩时保留最近 N 轮原文
+# MEMORY_MAX_FACTS = 50       # 长期事实条数上限，超过 LLM 合并到 30
+
+# ---- 语音识别（ASR）----
+# sensevoice（默认，本地 sherpa-onnx，中文精度高、CPU 快）：模型放 assets/models/sense-voice/
+#   （缺失时首次启动自动从 hf-mirror 下载 ~230MB，失败回退 whisper）
+# whisper（回退档，faster-whisper small）：走 HF 模型缓存
+# ASR_BACKEND = "sensevoice"
+# ASR_MODEL_DIR = "assets/models/sense-voice"  # 模型目录（相对项目根或绝对路径）
+
+# ---- 语音输出（TTS）----
+# TTS_BACKEND: siliconflow（默认，API 托管 CosyVoice2，稳定）/ cosyvoice2（本地，未完成）/ dummy / none
+TTS_BACKEND = "siliconflow"
+TTS_API_KEY = ""  # SiliconFlow API key（https://cloud.siliconflow.cn）
+TTS_BASE_URL = "https://api.siliconflow.cn/v1"
+TTS_MODEL = "FunAudioLLM/CosyVoice2-0.5B"
+TTS_SAMPLE_RATE = 32000
+# 零样本克隆：参考音频（3-10 秒）与其文本内容（克隆音色必需）
+TTS_VOICE_REF = "assets/voice_ref.wav"
+TTS_VOICE_REF_TEXT = "（参考音频里说的话，务必与音频内容一致）"
+
+# ---- 桌宠贴图 ----
+# 可选：贴图路径（相对项目目录或绝对路径），支持静态图与 GIF 动图
+# SPRITE = "assets/nuonuo.png"

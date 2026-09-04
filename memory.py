@@ -6,9 +6,8 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "pet.db"
 
-# 未压缩轮次超过 MAX_CONTEXT_TURNS 时触发摘要压缩,压缩后只保留最近 KEEP_RECENT_TURNS 轮
-MAX_CONTEXT_TURNS = 30
-KEEP_RECENT_TURNS = 10
+# 记忆阈值的默认值在策略 owner（backends/openai.py 的 DEFAULT_*），经 config 的
+# MEMORY_* 键覆盖——本模块纯机制（SQL 存取），不持有自己不用的策略数字
 
 
 def sanitize_message(msg):
@@ -36,7 +35,7 @@ def render_messages(msgs):
             lines.append(f"用户: {content}")
         elif role == "assistant":
             if content:
-                lines.append(f"糯糯: {content}")
+                lines.append(f"桃桃: {content}")
         elif role == "tool":
             lines.append(f"[工具 {m.get('name')}] {content}")
     return "\n".join(lines)

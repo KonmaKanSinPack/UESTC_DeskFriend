@@ -1,0 +1,8 @@
+# 复制为 config/openai.toml——openai 后端配置（BACKEND = "openai" 时由 common.toml 合并加载）
+
+API_KEY = "sk-..."
+BASE_URL = "https://api.example.com/v1"
+OPENAI_MODEL = "gemini-2.5-pro"  # 本地端点（LM Studio/Ollama）须填实际加载的模型名，否则 400
+
+# 可选：自定义系统提示词（人设）。不填则使用内置的糯糯人设。
+# SYSTEM_PROMPT = "你是糯糯，一只Q版弗洛洛毛绒玩偶形态的桌面AI伙伴……"

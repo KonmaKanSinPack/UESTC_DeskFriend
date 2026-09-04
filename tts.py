@@ -1,6 +1,6 @@
 """语音输出（TTS）器官：与 listen.py（语音输入）对称。
 
-架构：TTS 抽象 + 可插拔实现，按 config.toml 的 TTS_BACKEND 键装配（照 backends 工厂模式）。
+架构：TTS 抽象 + 可插拔实现，按 config/ 分层配置的 TTS_BACKEND 键装配（照 backends 工厂模式）。
 当前实现：
 - DummyTTS（占位）：记录调用不打开发声，先跑通「朗读 → 打断 → 打断位置进 context」链路
 - CosyVoice2TTS（stub）：本地合成，待环境就绪后接入（torch + 模型 + 参考音频）

@@ -1,0 +1,18 @@
+# 复制为 config/astrbot.toml——astrbot 后端配置（BACKEND = "astrbot" 时由 common.toml 合并加载）
+# 判定器密钥用 common.toml 的 API_KEY 兜底（本地端点任意非空串）
+
+# ---- OneBot 11 伪装通道 ----
+ASTRBOT_WS_URL = "ws://127.0.0.1:20081/api"  # AstrBot OneBot 适配器的反向 WebSocket 地址
+ASTRBOT_WS_TOKEN = ""  # 反向 WS token（Authorization: Bearer 头；没有则留空）
+ASTRBOT_USER_ID = 1063310598  # 伪装消息的发送者 id（桃桃认识的人）
+ASTRBOT_SELF_ID = 10001  # 伪装的 OneBot 机器人自身 id
+ASTRBOT_TIMEOUT = 90.0  # 等桃桃回复的总超时（秒）
+# 回复静默判定（秒）：收到回复后等这么久没有新回复才视为最终回复（取最后一条）
+ASTRBOT_SETTLE = 2.0
+
+# ---- 屏幕感知（主动观察）----
+SCREEN_IDLE_INTERVAL = 60  # idle 态观察周期（秒）
+SCREEN_ACTIVE_INTERVAL = 20  # active 态（对话后 2 分钟内）观察周期（秒）
+SCREEN_CHANGE_THRESHOLD = 0.05  # 屏幕变化幅度阈值（16×16 感知哈希归一化距离，0~1）
+SCREEN_COOLDOWN = 180  # 主动观察冷却（秒），防止过度打扰
+SCREEN_USER_SILENCE = 120  # 距上次用户输入的最小静默（秒）

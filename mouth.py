@@ -58,7 +58,7 @@ class Mouth(QObject):
     finished = pyqtSignal()  # 朗读结束（自然播完或被打断均触发）
 
     def __init__(self, config=None, tts=None):
-        """tts 可注入（测试用）；生产路径从 config.toml 经工厂创建（照 Brain 模式）。"""
+        """tts 可注入（测试用）；生产路径从 config/ 分层配置经工厂创建（照 Brain 模式）。"""
         super().__init__()
         self.tts = tts or create_tts(config or {})
         self.speaking = False  # 门控：朗读会话中（含尾巴）；耳据此 drop/监听

@@ -4,8 +4,21 @@ from types import SimpleNamespace
 import pytest
 
 from backends.judger import JUDGE_SYSTEM_PROMPT
-from backends.openai import MAX_FACTS, SUMMARY_SYSTEM_PROMPT, OpenAIBackend, parse_fact_ops
-from memory import KEEP_RECENT_TURNS, MAX_CONTEXT_TURNS, MemoryStore, render_messages, revive_message, sanitize_message
+from backends.openai import (
+    DEFAULT_KEEP_RECENT_TURNS as KEEP_RECENT_TURNS,
+)
+from backends.openai import (
+    DEFAULT_MAX_CONTEXT_TURNS as MAX_CONTEXT_TURNS,
+)
+from backends.openai import (
+    DEFAULT_MAX_FACTS as MAX_FACTS,
+)
+from backends.openai import (
+    SUMMARY_SYSTEM_PROMPT,
+    OpenAIBackend,
+    parse_fact_ops,
+)
+from memory import MemoryStore, render_messages, revive_message, sanitize_message
 
 
 @pytest.fixture()
@@ -111,6 +124,8 @@ class TestRevive:
         msgs = store.load_unsummarized()
         assert msgs[0]["content"] == [{"type": "text", "text": "[历史截图，内容已省略]"}]
 
+
+class TestRenderMessages:
     def test_render_messages(self):
         msgs = [
             _user_msg("看看我的屏幕"),
@@ -121,7 +136,7 @@ class TestRevive:
         text = render_messages(msgs)
         assert "用户: 看看我的屏幕" in text
         assert "[工具 look_at_screen] 已查看" in text
-        assert "糯糯: 你在写代码" in text
+        assert "桃桃: 你在写代码" in text  # 助手显示名（用户 2026-09-04 由糯糯改为桃桃）
 
 
 class _StubClient:
