@@ -21,7 +21,7 @@ import random
 import time
 from pathlib import Path
 
-from PyQt5.QtCore import QPointF, Qt, QTimer
+from PyQt5.QtCore import QPoint, Qt, QTimer
 from PyQt5.QtGui import QCursor, QPainter, QPixmap, QTransform
 from PyQt5.QtWidgets import QWidget
 
@@ -136,7 +136,9 @@ class PsdRenderer(QWidget):
         # （真机常显示，此守卫为离屏渲染/paint 先于 show 的防御）
         track = (0.0, 0.0)
         if self.isVisible():
-            center = self.mapToGlobal(QPointF(self.width() / 2, self.height() / 2))
+            # PyQt5 的 mapToGlobal 只收 QPoint（传 QPointF 是 TypeError，首帧 paint
+            # 即崩——真机踩出；整数中心对视线计算精度足够）
+            center = self.mapToGlobal(QPoint(self.width() // 2, self.height() // 2))
             cursor = QCursor.pos()
             dx, dy = cursor.x() - center.x(), cursor.y() - center.y()
             track = eye_track_offset(dx, dy, math.hypot(dx, dy))

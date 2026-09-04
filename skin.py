@@ -144,7 +144,10 @@ class Skin(QWidget):
         self._just_double_clicked = False
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self._anim_tick)
-        self.anim_timer.start(ANIM_INTERVAL_IDLE)  # 起始即 idle 档
+        if self.renderer is None:
+            # 分层渲染模式不启动整窗微动（形象动画在渲染器内、窗口恒定）；
+            # 计时器仍创建，保持属性面完整
+            self.anim_timer.start(ANIM_INTERVAL_IDLE)  # 起始即 idle 档
 
     def _load_sprite(self):
         """加载形象，三种形态按 SPRITE 后缀分流：
@@ -159,12 +162,13 @@ class Skin(QWidget):
             sprite_path = PROJECT_DIR / sprite_path
 
         if sprite_path.suffix.lower() == ".json":
-            # 分层渲染模式：渲染器自驱动画（控件内重绘），整窗微动定时器停用——
-            # 窗口位置从此恒定，绕开"每帧 move 触发 DWM 全窗重合成"的最贵路径
+            # 分层渲染模式：渲染器自驱动画（控件内重绘），整窗微动不启用——
+            # 窗口位置从此恒定，绕开"每帧 move 触发 DWM 全窗重合成"的最贵路径。
+            # 注意此处不能动 anim_timer：_load_sprite 在 __init__ 早期调用，
+            # 该定时器尚未创建（真机首跑踩出 AttributeError）；不启动交给下方装配处守卫
             from psd_renderer import PsdRenderer
 
             self.renderer = PsdRenderer(str(sprite_path))
-            self.anim_timer.stop()
         elif sprite_path.suffix.lower() == ".gif":
             self.movie = QMovie(str(sprite_path))
             self.movie.jumpToFrame(0)  # 先取一帧拿到原始尺寸，按比例算缩放
