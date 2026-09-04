@@ -16,6 +16,9 @@ brain.py       Brain 门面：统一契约转发后端 + pack_msg/parse_tool_arg
 backends/      base.py（契约）/ __init__.py（工厂+create_judge）/ astrbot.py / openai.py / judger.py
 onebot_bridge.py  OneBot 11 反向 WS 伪装客户端
 listen.py / mouth.py / vision.py / skin.py   器官（耳/嘴/眼/皮）
+psd_renderer.py  分层渲染器（皮的内部细节，2026-09-04）：SPRITE 指向 manifest.json 时
+               启用——眨眼/视线/口型/呼吸/发摆；渲染器自驱动画，窗口恒定不动
+tools/         prepare_psd（See-through PSD→拆 L/R+扩边+manifest）/ make_demo_pet（演示层）
 asr.py         ASR 引擎层（对称 tts.py）：SenseVoice（sherpa-onnx 本地，默认）/ Whisper（回退）
                + create_asr 工厂 + 模型自动下载（hf-mirror 直链 → GitHub tar 兜底）
 tts.py         TTS 抽象 + SiliconFlow / CosyVoice2(未完成) / Dummy 工厂

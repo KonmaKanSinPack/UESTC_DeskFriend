@@ -168,7 +168,9 @@ tts.py         # 语音输出：TTS 抽象 + SiliconFlow（默认）/ CosyVoice2
 vision.py      # 截屏（Wayland PipeWire → gnome-screenshot → X11 ImageGrab）
 listen.py      # VAD 语音检测 + SenseVoice/Whisper 转写（asr.py 引擎层：可插拔 + 模型自动下载）
 asr.py         # ASR 引擎层：SenseVoice（本地 sherpa-onnx，默认）/ Whisper（回退）+ 工厂
-skin.py        # 外观器官（皮）：贴图、气泡、输入框、动画、拖动/双击/右键输入、系统托盘与退出
+skin.py        # 外观器官（皮）：贴图/分层渲染/气泡/输入框/动画、拖动/双击/右键输入、系统托盘与退出
+psd_renderer.py # 分层渲染器（SPRITE 指向 manifest.json 启用）：眨眼/视线跟随/口型/呼吸/发摆
+tools/         # PSD 预处理（prepare_psd：拆左右+扩边）与演示宠物生成
 spine.py       # 主控中枢（脊髓）：器官装配、消息队列、判定、回复与退出编排
 pw_capture.py  # Wayland 静默截屏后端（ScreenCast Portal + PipeWire + GStreamer）
 assets/        # 贴图 + VAD 模型 + 音色参考音频

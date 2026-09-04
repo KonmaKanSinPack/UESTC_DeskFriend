@@ -37,6 +37,9 @@
 - 2026-09-04：hotfix——重启后图片占位符毒化上下文致 API 500（revive_message 还原边界）；
   **config 三文件分层**（common/openai/astrbot + 记忆阈值 MEMORY_* 配置化 +
   load_config 迁出 skin + 工厂显式传 config）；含用户改名 render_messages 助手名→桃桃
+- 2026-09-04（第二轮）：**PSD 直驱渲染器**——prepare_psd（拆 L/R+扩边+manifest）+
+  PsdRenderer（眨眼/视线/口型/呼吸/发摆）+ skin 按 SPRITE 后缀装配；演示宠物离屏
+  出帧验证通过。**等用户重发 seethrough PSD**（原件已不在本机）后跑 prepare 即换真桃桃
 
 ## 待办（下一步候选，优先级自上而下）
 
@@ -62,6 +65,9 @@
       气泡先见转写原文再见回复、呼吸动画节奏与之前一致
 - [ ] ⑥ UI 美化——气泡圆角暖白+柔投影、淡入淡出不生硬、生成中三点跳动、
       回复覆盖无闪烁、输入框聚焦桃红描边、超时 10s 淡出自隐
+- [ ] ⑦ PSD 渲染——（换真桃桃层后）眨眼随机左右独立、视线跟鼠标、说话嘴动、
+      呼吸起伏、发丝轻摆、thinking 摆动、拖动正常、透明底；演示层可先行：
+      SPRITE 指 assets/live2d/demo/manifest.json
 
 ## 已知风险 / 注意
 
