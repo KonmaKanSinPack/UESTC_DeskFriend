@@ -1,0 +1,134 @@
+{
+  "canvas": [
+    768,
+    768
+  ],
+  "layers": [
+    {
+      "name": "back hair",
+      "file": "back_hair.png",
+      "x": 186,
+      "y": -3
+    },
+    {
+      "name": "handwear L",
+      "file": "handwear_L.png",
+      "x": 173,
+      "y": 122
+    },
+    {
+      "name": "handwear R",
+      "file": "handwear_R.png",
+      "x": 359,
+      "y": 122
+    },
+    {
+      "name": "footwear",
+      "file": "footwear.png",
+      "x": 318,
+      "y": 660
+    },
+    {
+      "name": "legwear",
+      "file": "legwear.png",
+      "x": 248,
+      "y": 279
+    },
+    {
+      "name": "neck",
+      "file": "neck.png",
+      "x": 339,
+      "y": 77
+    },
+    {
+      "name": "topwear",
+      "file": "topwear.png",
+      "x": 252,
+      "y": 118
+    },
+    {
+      "name": "ears",
+      "file": "ears.png",
+      "x": 314,
+      "y": 69
+    },
+    {
+      "name": "face",
+      "file": "face.png",
+      "x": 315,
+      "y": 21
+    },
+    {
+      "name": "mouth",
+      "file": "mouth.png",
+      "x": 353,
+      "y": 91
+    },
+    {
+      "name": "eyewhite L",
+      "file": "eyewhite_L.png",
+      "x": 325,
+      "y": 63
+    },
+    {
+      "name": "eyewhite R",
+      "file": "eyewhite_R.png",
+      "x": 358,
+      "y": 63
+    },
+    {
+      "name": "eyebrow L",
+      "file": "eyebrow_L.png",
+      "x": 323,
+      "y": 47
+    },
+    {
+      "name": "eyebrow R",
+      "file": "eyebrow_R.png",
+      "x": 354,
+      "y": 47
+    },
+    {
+      "name": "nose",
+      "file": "nose.png",
+      "x": 351,
+      "y": 75
+    },
+    {
+      "name": "irides L",
+      "file": "irides_L.png",
+      "x": 332,
+      "y": 62
+    },
+    {
+      "name": "irides R",
+      "file": "irides_R.png",
+      "x": 358,
+      "y": 62
+    },
+    {
+      "name": "eyelash L",
+      "file": "eyelash_L.png",
+      "x": 320,
+      "y": 57
+    },
+    {
+      "name": "eyelash R",
+      "file": "eyelash_R.png",
+      "x": 357,
+      "y": 57
+    },
+    {
+      "name": "headwear",
+      "file": "headwear.png",
+      "x": 302,
+      "y": 3
+    },
+    {
+      "name": "front hair",
+      "file": "front_hair.png",
+      "x": 280,
+      "y": -3
+    }
+  ]
+}
