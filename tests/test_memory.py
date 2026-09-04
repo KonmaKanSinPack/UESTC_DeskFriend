@@ -5,7 +5,7 @@ import pytest
 
 from backends.judger import JUDGE_SYSTEM_PROMPT
 from backends.openai import MAX_FACTS, SUMMARY_SYSTEM_PROMPT, OpenAIBackend, parse_fact_ops
-from memory import KEEP_RECENT_TURNS, MAX_CONTEXT_TURNS, MemoryStore, render_messages, sanitize_message
+from memory import KEEP_RECENT_TURNS, MAX_CONTEXT_TURNS, MemoryStore, render_messages, revive_message, sanitize_message
 
 
 @pytest.fixture()
@@ -72,6 +72,44 @@ class TestSanitize:
 
     def test_plain_text_untouched(self):
         assert sanitize_message(_user_msg("你好")) == _user_msg("你好")
+
+
+class TestRevive:
+    """库 → 运行时还原：图片占位符必须变成 API 安全的文本段。
+
+    回归背景（2026-09-04）：占位符留在 image_url.url 里，重启恢复的上下文发给
+    API 被 base64 解码报 500 convert_request_failed，之后每轮对话全挂。
+    """
+
+    def test_placeholder_image_becomes_text_part(self):
+        msg = {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "[image omitted]"}}],
+        }
+        revived = revive_message(msg)
+        assert revived["content"] == [{"type": "text", "text": "[历史截图，内容已省略]"}]
+        # 原消息不被修改（DB 里的占位符原样保留）
+        assert msg["content"][0]["image_url"]["url"] == "[image omitted]"
+
+    def test_real_data_url_preserved(self):
+        msg = {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],
+        }
+        assert revive_message(msg) == msg  # 真实内存图片（data: 开头）原样通过
+
+    def test_plain_text_untouched(self):
+        assert revive_message(_user_msg("你好")) == _user_msg("你好")
+
+    def test_store_roundtrip_is_api_safe(self, store):
+        """全链路回归：带图消息落库（脱敏）→ 重启恢复 → 上下文里无非法 image_url。"""
+        img_msg = {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],
+        }
+        store.add_message(1, img_msg)
+        msgs = store.load_unsummarized()
+        assert msgs[0]["content"] == [{"type": "text", "text": "[历史截图，内容已省略]"}]
 
     def test_render_messages(self):
         msgs = [

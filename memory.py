@@ -42,6 +42,32 @@ def render_messages(msgs):
     return "\n".join(lines)
 
 
+def revive_message(msg):
+    """库 → 运行时的还原副本：把 sanitize 落库的图片占位符换成 API 安全的文本段。
+
+    为什么必须有（2026-09-04 修复）：占位符 "[image omitted]" 留在 image_url.url
+    里时，重启后恢复的上下文发给 API 会被当作 base64 解码，实测报
+    500 convert_request_failed（illegal base64 data at input byte 0）——此后每一轮
+    对话都带着这个坏消息，全部失败。判定规则：url 不以 "data:" 开头的图片段
+    一律换成文本占位（真实内存图片恒为 data: URL，只会命中落库占位符）。
+    """
+    m = copy.deepcopy(msg)
+    content = m.get("content")
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if (
+                isinstance(part, dict)
+                and part.get("type") == "image_url"
+                and not str(part.get("image_url", {}).get("url", "")).startswith("data:")
+            ):
+                parts.append({"type": "text", "text": "[历史截图，内容已省略]"})
+            else:
+                parts.append(part)
+        m["content"] = parts
+    return m
+
+
 class MemoryStore:
     """对话记忆存储:完整消息历史(messages)+ 单行滚动摘要(summaries)。
 
@@ -94,9 +120,13 @@ class MemoryStore:
         self.conn.commit()
 
     def load_unsummarized(self):
-        """加载全部未压缩消息(按写入顺序),用于启动时恢复上下文。"""
+        """加载全部未压缩消息（按写入顺序），用于启动时恢复上下文。
+
+        返回前过 revive_message：落库的图片占位符若原样回到上下文，会在下一轮
+        请求里被 API 当 base64 解码而 500（见 revive_message 注释）。
+        """
         rows = self.conn.execute("SELECT msg_json FROM messages WHERE summarized = 0 ORDER BY id").fetchall()
-        return [json.loads(r[0]) for r in rows]
+        return [revive_message(json.loads(r[0])) for r in rows]
 
     def unsummarized_turn_count(self):
         row = self.conn.execute("SELECT COUNT(DISTINCT turn_id) FROM messages WHERE summarized = 0").fetchone()
