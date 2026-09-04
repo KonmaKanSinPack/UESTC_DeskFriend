@@ -13,3 +13,4 @@ CosyVoice/
 assets/models.venv-cosyvoice/
 assets/models/
 local.md
+tmp_*
