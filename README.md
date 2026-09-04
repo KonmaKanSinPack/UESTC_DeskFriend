@@ -4,7 +4,7 @@
 
 - **听觉**：麦克风常驻监听，Silero VAD（ONNX，本地模型）检测说话，SenseVoice 本地转写（中文精度高、CPU 快，模型缺失自动下载；whisper 为回退档）
 - **视觉**：截屏注入多模态大模型上下文，说一句"看看我的屏幕"它就能描述你在干什么
-- **对话**：可插拔回复后端（`config.toml` 的 `BACKEND` 键选择）：
+- **对话**：可插拔回复后端（`config/common.toml` 的 `BACKEND` 键选择）：
   - `astrbot`（默认）：经 OneBot 11 伪装通道接入 AstrBot 的桃桃，记忆/人格由 AstrBot 接管；自带屏幕感知（屏幕变化时主动观察冒泡）
   - `openai`：直连 OpenAI 兼容接口（默认 `gemini-2.5-pro`），自建 SQLite 记忆
 - **语音输出**：桃桃回复自动朗读（SiliconFlow 托管 CosyVoice2，可克隆自定义音色）；朗读中你说话会立即打断，桃桃知道说到哪
@@ -47,21 +47,26 @@ uv sync
 
 ### 配置
 
+配置按"共享 + 后端专属"分三个文件（`config/` 目录，合并规则：common 读出
+`BACKEND` → 加载对应后端文件，后端键覆盖同名共享键）：
+
 ```bash
-cp config.example.toml config.toml
+cp config/common.example.toml config/common.toml    # BACKEND 选择器 + 共享键（判定器/TTS/ASR/贴图/记忆阈值）
+cp config/openai.example.toml config/openai.toml    # BACKEND="openai" 时：API_KEY/BASE_URL/OPENAI_MODEL
+cp config/astrbot.example.toml config/astrbot.toml  # BACKEND="astrbot" 时：ASTRBOT_*/SCREEN_*
 ```
 
 **跑通所需键位清单**（按功能勾选，缺哪个功能就填哪组）：
 
-| 功能 | 必填键 | 说明 |
+| 功能 | 必填键 | 所在文件 |
 |---|---|---|
-| 对话（astrbot 后端，默认） | `ASTRBOT_WS_URL` / `ASTRBOT_WS_TOKEN` | AstrBot 反向 WS 地址与 token，见下节 |
-| 判定器（该不该回） | `API_KEY` / `BASE_URL` + `JUDGE_MODEL` | 判定走 LLM（本地 Ollama / 云端均可） |
-| 语音输出（朗读） | `TTS_BACKEND` / `TTS_API_KEY` / `TTS_VOICE_REF` / `TTS_VOICE_REF_TEXT` | 见"语音输出"章节 |
-| 可选 | `SYSTEM_PROMPT` 人设 / `SPRITE` 贴图 / `SCREEN_*` 屏幕感知参数 | 不填用默认 |
-
-> 注意：判定器与 openai 后端共用 `API_KEY`/`BASE_URL`；若判定器用本地模型（如
-> Ollama/LM Studio），直接把 `BASE_URL` 指向本地端点即可。
+| 后端选择 | `BACKEND` | common.toml |
+| 对话（astrbot 后端，默认） | `ASTRBOT_WS_URL` / `ASTRBOT_WS_TOKEN` | astrbot.toml |
+| 对话（openai 后端） | `API_KEY` / `BASE_URL` / `OPENAI_MODEL` | openai.toml |
+| 判定器（该不该回） | `API_KEY` + `JUDGE_URL` / `JUDGE_MODEL` | common.toml（本地端点密钥任意非空串） |
+| 语音输出（朗读） | `TTS_BACKEND` / `TTS_API_KEY` / `TTS_VOICE_REF` / `TTS_VOICE_REF_TEXT` | common.toml |
+| 记忆长度（openai 后端） | `MEMORY_MAX_TURNS` / `MEMORY_KEEP_RECENT` / `MEMORY_MAX_FACTS` | common.toml（不填用默认 30/10/50） |
+| 可选 | `SYSTEM_PROMPT` 人设（openai.toml）/ `SPRITE` 贴图（common.toml）/ `SCREEN_*`（astrbot.toml） | — |
 
 ### 接入 AstrBot（astrbot 后端）
 
@@ -73,7 +78,7 @@ cp config.example.toml config.toml
 主机 `0.0.0.0`、端口任意（如 8786）、token 自定；NapCat 等正常客户端照常连接，
 桌宠与之共存。
 
-**桌宠侧**：config.toml 填好 `ASTRBOT_WS_URL`（如 `ws://192.168.10.2:8786/ws`）与
+**桌宠侧**：config/astrbot.toml 填好 `ASTRBOT_WS_URL`（如 `ws://192.168.10.2:8786/ws`）与
 `ASTRBOT_WS_TOKEN` 即可。握手自动携带三个头（aiocqhttp 强制要求，缺一不可）：
 `Authorization: Bearer <token>`、`X-Client-Role: universal`、`X-Self-ID: <self_id>`。
 

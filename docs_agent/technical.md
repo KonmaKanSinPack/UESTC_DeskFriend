@@ -90,12 +90,13 @@ class BackendResponse:
   `sanitize_message`（base64 图片→占位符）；**恢复过 `revive_message`**（2026-09-04：
   非 `data:` 的图片段→`[历史截图，内容已省略]` 文本段——占位符留在 image_url 里
   发 API 会被 base64 解码 500，毒化重启后所有对话）。
-- **config.toml 键清单**（权威：`config.example.toml`）：
-  `BACKEND`；astrbot 段 `ASTRBOT_WS_URL/WS_TOKEN/USER_ID/SELF_ID/TIMEOUT/SETTLE`；
-  屏幕感知段 `SCREEN_IDLE_INTERVAL/ACTIVE_INTERVAL/CHANGE_THRESHOLD/COOLDOWN/USER_SILENCE`；
-  判定段 `JUDGE_URL/JUDGE_MODEL`；openai 段 `API_KEY/BASE_URL/OPENAI_MODEL`；
-  `SYSTEM_PROMPT`（缺省内置糯糯人设）；TTS 段 `TTS_BACKEND/API_KEY/BASE_URL/MODEL/
-  SAMPLE_RATE/VOICE_REF/VOICE_REF_TEXT`；`SPRITE`。
+- **config 分层（2026-09-04）**：`config_loader.load_config()` 合并 `config/common.toml`
+  （BACKEND 选择器 + 共享：JUDGE_*/TTS_*/ASR_*/SPRITE/MEMORY_*）与
+  `config/{BACKEND}.toml`（openai：API_KEY/BASE_URL/OPENAI_MODEL/SYSTEM_PROMPT；
+  astrbot：ASTRBOT_*/SCREEN_*），后端键覆盖同名共享键；缺文件抛 `ConfigError`
+  带修复指引。记忆阈值默认值在 `backends/openai.py` 的 `DEFAULT_*`（30/10/50），
+  经 MEMORY_MAX_TURNS / MEMORY_KEEP_RECENT / MEMORY_MAX_FACTS 覆盖。
+  权威键清单见 `config/*.example.toml`。
 
 ## 5. OneBot 桥协议（onebot_bridge.py ↔ AstrBot）
 

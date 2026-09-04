@@ -34,6 +34,9 @@
 - 2026-09-03（第五轮）：**UI 美化**——圆角卡气泡（暖白+桃桃红+柔投影+淡入淡出）、
   生成中三点指示（set_pending 命令）、输入框聚焦样式；用户已定方向：**形象换 Live2D**
   （vs 3D 已建议 Live2D，技术选型 live2d-py vs QtWebEngine 留该轮）
+- 2026-09-04：hotfix——重启后图片占位符毒化上下文致 API 500（revive_message 还原边界）；
+  **config 三文件分层**（common/openai/astrbot + 记忆阈值 MEMORY_* 配置化 +
+  load_config 迁出 skin + 工厂显式传 config）；含用户改名 render_messages 助手名→桃桃
 
 ## 待办（下一步候选，优先级自上而下）
 
