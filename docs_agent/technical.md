@@ -86,8 +86,10 @@ class BackendResponse:
 
 - **memory.py 四表**（sqlite3，`pet.db`）：`messages`（turn_id 归组、summarized 标记）、
   `summaries`（恒单行滚动摘要）、`facts`（长期事实 CRUD）、`meta`（抽取游标）。
-  核心不变式：**未压缩消息与内存 context 一一对应**。落库过 `sanitize_message`
-  （base64 图片→占位符）。
+  核心不变式：**未压缩消息与内存 context 一一对应**（条数/顺序）。落库过
+  `sanitize_message`（base64 图片→占位符）；**恢复过 `revive_message`**（2026-09-04：
+  非 `data:` 的图片段→`[历史截图，内容已省略]` 文本段——占位符留在 image_url 里
+  发 API 会被 base64 解码 500，毒化重启后所有对话）。
 - **config.toml 键清单**（权威：`config.example.toml`）：
   `BACKEND`；astrbot 段 `ASTRBOT_WS_URL/WS_TOKEN/USER_ID/SELF_ID/TIMEOUT/SETTLE`；
   屏幕感知段 `SCREEN_IDLE_INTERVAL/ACTIVE_INTERVAL/CHANGE_THRESHOLD/COOLDOWN/USER_SILENCE`；
