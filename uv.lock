@@ -1366,6 +1366,33 @@ wheels = [
 ]
 
 [[package]]
+name = "psd-tools"
+version = "1.19.0"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/a0/a4/87453135b112790559ba1cc54cae00181d4830470ca99649dfa83d798b6d/psd_tools-1.19.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:a000bae40230ab8dc52bc80d3eddc9c003e6812aa61d97fc1597ca9716c667ec", size = 446126, upload-time = "2026-09-02T09:31:09.981Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/11/5a/4860cbd68e5788622cd6026e307e32bb94ea2868afb5f77aaaac086a1b44/psd_tools-1.19.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:512a172bc6822d4b25d41a8e54b5ead3f576f101f2e37f2ad6c3f1acf1b2fc70", size = 445134, upload-time = "2026-09-02T09:31:11.003Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/48/65/fe0671a6a20c93d857d43a337a1421b28681e3402ab91a432107a30816cc/psd_tools-1.19.0-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a42a8cb2a3cfea9760cec7b80e29ff097469ba5e96d3901620771ecf020cc9a2", size = 853708, upload-time = "2026-09-02T09:31:12.485Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/16/f5/cbb3ee3df419d8b0ce660b598b441e74a882b8530e736b4135d51386ccb8/psd_tools-1.19.0-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:38ea5685fbd699b95218b6ee7f6f15036bc0539d1e3f63daa1d9c4e83005c4e2", size = 856083, upload-time = "2026-09-02T09:31:13.785Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/bd/06/792368bd8d8d69b3ed3c01e0ea1009e61814c0fefd21a63d24c73da540d9/psd_tools-1.19.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:a39e011dac04f5b250fe253b61728d35080f57d5e795e1b293e97c30726f7614", size = 1823560, upload-time = "2026-09-02T09:31:15.152Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/26/92/5d96f61187b568c7ea2b84349bf72c74d9d2383cfd056af2caea9040f8ec/psd_tools-1.19.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:799b19e0612489e538649762571bc5987eaa6d97ed38dc5ba16dc3e32fc513a9", size = 1884237, upload-time = "2026-09-02T09:31:16.46Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/7c/51/178c882c96d65a913aff673a6c77da222315c774d501cbb3d021f1848e51/psd_tools-1.19.0-cp312-cp312-win_amd64.whl", hash = "sha256:cf481e327302934c52019b3ffb69f8b61c4fe6a5d175e3fe18c62331648feac2", size = 628211, upload-time = "2026-09-02T09:31:17.636Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/63/8d/893ebd2f1977be2f5cc035d272915b7d8ade0ed41bb49f78fdaaf455d3eb/psd_tools-1.19.0-cp312-cp312-win_arm64.whl", hash = "sha256:8991fb36b6d65eee9699d0c5d8182e04076ff4703752ff480927421afe50d06f", size = 792281, upload-time = "2026-09-02T09:31:18.943Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/71/33/abf94cefda85600902730d0798b9f5a1b3c0296ae1a024528036a7114646/psd_tools-1.19.0-cp313-abi3-macosx_10_13_x86_64.whl", hash = "sha256:edff739750a08485ea4e44baaafddcd0593711b57677f1b51de2d438e037d7a1", size = 436643, upload-time = "2026-09-02T09:31:20.184Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/76/49/9c176d54d9f1a8419caf16b75b56122695953dd95cec5dd53643f432b957/psd_tools-1.19.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:1a49719a344fa921b44db9131334e4ab66b0b2b9b6d101b28b13db2cd2e48fc2", size = 435542, upload-time = "2026-09-02T09:31:21.254Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/79/d6/8cea9defe832f1fc529584a7740debf4ee2a27f95f3c3ce079543adb80fd/psd_tools-1.19.0-cp313-abi3-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:abe37326aca4b05fd36d5a3528cd34c03cbf1b09762a4e877a183a78317b62a8", size = 770887, upload-time = "2026-09-02T09:31:22.47Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/ca/66/c7cc0571fe91f18ce764f8eecb5c0cbf948e54e0c05ee537ba9280a74b53/psd_tools-1.19.0-cp313-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:36e9057f6c1e8e1092b83b6974f221577d8df0e49455f50cebaeca61bcbb4c69", size = 774588, upload-time = "2026-09-02T09:31:24.692Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/28/39/532806b345228a6e032e5f6fc52fa439fd352507991a56a81499f043a9df/psd_tools-1.19.0-cp313-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:06ca81bbeeb7c90a5dcd33a270096ff0c8c91bb698d322e3d193284ed02dd9e2", size = 1744089, upload-time = "2026-09-02T09:31:25.847Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/83/ae/8e09700c19a35da1efe950ee36071c952baf6e9212bcaf9321550556abef/psd_tools-1.19.0-cp313-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:7851d9d22fd4e12fe6baead34d1ab6b03fba5aa662700f0db08c6c213dd07c55", size = 1804250, upload-time = "2026-09-02T09:31:27.089Z" },
+]
+
+[[package]]
 name = "pyahocorasick"
 version = "2.3.1"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -2185,6 +2212,7 @@ dependencies = [
     { name = "openai" },
     { name = "openai-whisper" },
     { name = "pillow" },
+    { name = "psd-tools" },
     { name = "pyarrow" },
     { name = "pyqt5" },
     { name = "pyqt5-qt5" },
@@ -2233,6 +2261,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.0" },
     { name = "openai-whisper", specifier = "==20231117" },
     { name = "pillow", specifier = ">=10.0" },
+    { name = "psd-tools", specifier = ">=1.19.0" },
     { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "pyqt5", specifier = ">=5.15" },
     { name = "pyqt5-qt5", specifier = "==5.15.2" },
