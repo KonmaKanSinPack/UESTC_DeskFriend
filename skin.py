@@ -56,6 +56,7 @@ class Skin(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)  # 设置透明背景
 
         self.label = QLabel(self)
+        self.renderer = None  # PsdRenderer 装配位（SPRITE 指向 manifest.json 时启用）
         self._load_sprite()
         self._init_tray()
 
@@ -124,6 +125,11 @@ class Skin(QWidget):
         layout.addWidget(self.pending_label, alignment=Qt.AlignHCenter)
         layout.addWidget(self.input_box, alignment=Qt.AlignHCenter)
         layout.addWidget(self.label, alignment=Qt.AlignHCenter)
+        if self.renderer is not None:
+            # 分层渲染模式：贴图 label 退休，渲染器进布局接管形象与动画
+            self.label.hide()
+            layout.removeWidget(self.label)
+            layout.addWidget(self.renderer, alignment=Qt.AlignHCenter)
         layout.setContentsMargins(0, 0, 0, 0)
         self.adjustSize()
 
@@ -141,13 +147,25 @@ class Skin(QWidget):
         self.anim_timer.start(ANIM_INTERVAL_IDLE)  # 起始即 idle 档
 
     def _load_sprite(self):
-        """从 config/common.toml 的 SPRITE 加载贴图，支持静态图与 GIF 动图。"""
+        """加载形象，三种形态按 SPRITE 后缀分流：
+
+        - .json → PsdRenderer 分层渲染（眨眼/视线/口型/呼吸，2026-09-04 直驱轮）
+        - .gif → QMovie 动图
+        - 其余 → 静态图
+        """
         sprite = load_config().get("SPRITE", "assets/nuonuo.png")
         sprite_path = Path(sprite)
         if not sprite_path.is_absolute():
             sprite_path = PROJECT_DIR / sprite_path
 
-        if sprite_path.suffix.lower() == ".gif":
+        if sprite_path.suffix.lower() == ".json":
+            # 分层渲染模式：渲染器自驱动画（控件内重绘），整窗微动定时器停用——
+            # 窗口位置从此恒定，绕开"每帧 move 触发 DWM 全窗重合成"的最贵路径
+            from psd_renderer import PsdRenderer
+
+            self.renderer = PsdRenderer(str(sprite_path))
+            self.anim_timer.stop()
+        elif sprite_path.suffix.lower() == ".gif":
             self.movie = QMovie(str(sprite_path))
             self.movie.jumpToFrame(0)  # 先取一帧拿到原始尺寸，按比例算缩放
             frame_size = self.movie.currentImage().size()
@@ -268,8 +286,12 @@ class Skin(QWidget):
 
         原理/复现：idle 呼吸是周期 ~2s 的慢正弦，8fps 采样视觉无差；换挡的依据
         是"动作频率"——晃动/弹跳的位移变化快，降帧会肉眼可见卡顿，故保 25fps。
+        分层渲染模式下语义转发给渲染器（窗口动画已停用）。
         """
         self._anim_state = state
+        if self.renderer is not None:
+            self.renderer.set_state(state)
+            return
         self.anim_timer.setInterval(ANIM_INTERVAL_IDLE if state == "idle" else ANIM_INTERVAL_ACTIVE)
 
     # ---------- 内部：外观细节自管理 ----------
@@ -285,8 +307,12 @@ class Skin(QWidget):
         self.text_submitted.emit(text)
 
     def _anim_tick(self):
-        """整窗微动动画。拖动中不动，避免和用户抢窗口位置。"""
-        if self._dragging:
+        """整窗微动动画。拖动中不动，避免和用户抢窗口位置。
+
+        分层渲染模式下本定时器已停（防御性再挡一层）：形象动画在 PsdRenderer
+        内部驱动，窗口位置恒定。
+        """
+        if self._dragging or self.renderer is not None:
             return
         if self._base_pos is None:
             self._base_pos = self.pos()

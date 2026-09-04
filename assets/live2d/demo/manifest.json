@@ -1,0 +1,86 @@
+{
+  "canvas": [
+    768,
+    768
+  ],
+  "layers": [
+    {
+      "name": "back hair",
+      "file": "back_hair.png",
+      "x": 174,
+      "y": 120
+    },
+    {
+      "name": "face",
+      "file": "face.png",
+      "x": 234,
+      "y": 190
+    },
+    {
+      "name": "front hair",
+      "file": "front_hair.png",
+      "x": 214,
+      "y": 110
+    },
+    {
+      "name": "eyewhite L",
+      "file": "eyewhite_L.png",
+      "x": 268,
+      "y": 300
+    },
+    {
+      "name": "eyewhite R",
+      "file": "eyewhite_R.png",
+      "x": 440,
+      "y": 300
+    },
+    {
+      "name": "irides L",
+      "file": "irides_L.png",
+      "x": 281,
+      "y": 302
+    },
+    {
+      "name": "irides R",
+      "file": "irides_R.png",
+      "x": 453,
+      "y": 302
+    },
+    {
+      "name": "eyelash L",
+      "file": "eyelash_L.png",
+      "x": 266,
+      "y": 292
+    },
+    {
+      "name": "eyelash R",
+      "file": "eyelash_R.png",
+      "x": 438,
+      "y": 292
+    },
+    {
+      "name": "eyebrow L",
+      "file": "eyebrow_L.png",
+      "x": 270,
+      "y": 274
+    },
+    {
+      "name": "eyebrow R",
+      "file": "eyebrow_R.png",
+      "x": 442,
+      "y": 274
+    },
+    {
+      "name": "mouth",
+      "file": "mouth.png",
+      "x": 371,
+      "y": 396
+    },
+    {
+      "name": "topwear",
+      "file": "topwear.png",
+      "x": 254,
+      "y": 440
+    }
+  ]
+}
