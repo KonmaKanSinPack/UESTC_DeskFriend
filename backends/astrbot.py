@@ -146,12 +146,15 @@ class AstrBotBackend(ReplyBackend):
 
         self.judge = judge  # LLM 决策器（should_reply 判定），由工厂注入
         self.observe_sink = None  # spine 挂的回调：门控通过后把观察文案交主控入统一队列（brain 门面转发）
+        self.tool_sink = None  # spine 挂的回调：AstrBot 插件的远程工具调用转发到统一分发点（brain 门面转发）
         self.interruption = None  # TTS 朗读被打断的位置（brain.set_interruption 注入，用后清除）
         self._last_phash = None  # 上次观察到的屏幕哈希
         self._last_proactive_at = 0.0  # 上次主动观察时间
         self._last_user_at = 0.0  # 上次用户消息时间
         self._active_until = 0.0  # 活跃观察期截止时间（对话后一段时间）
 
+        # 桥的工具传话接线：deskfriend_tool action → 本后端 → spine 统一分发
+        self.bridge.tool_handler = self._on_tool_action
         self.bridge.start()
         self._stop = False
         self._observe_task = None
@@ -168,6 +171,26 @@ class AstrBotBackend(ReplyBackend):
             except asyncio.CancelledError:
                 pass  # 任务被取消属预期
         await self.bridge.stop()
+
+    # ---------- 远程工具（AstrBot 插件 → OneBot action → 统一分发点） ----------
+
+    async def _on_tool_action(self, tool, args):
+        """deskfriend_tool action 的处理器（桥经 tool_handler 调用，只传话）。
+
+        执行经 brain.tool_sink → spine.execute_tool（与 openai 工具循环同一条链）；
+        回包给桥按 echo 返回给插件的 call_action。
+        """
+        sink = self.tool_sink
+        if sink is None:
+            return {"status": "failed", "text": "桌宠未装配工具执行链（主控未接线）"}
+        try:
+            text, image_url = await sink(tool, args)
+        except Exception as e:
+            return {"status": "failed", "text": f"工具执行出错：{e}"}
+        data = {"status": "ok", "text": text}
+        if image_url:
+            data["image"] = image_url  # data-url：插件存文件后在同会话注入上下文
+        return data
 
     # ---------- 对话 ----------
 

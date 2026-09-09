@@ -413,3 +413,66 @@ def test_quit_without_quit_app_is_safe():
         assert mouth.stop_count == 1
 
     asyncio.run(scenario())
+
+
+# ---------- 远程工具统一分发（2026-09-09） ----------
+
+
+class TestExecuteTool:
+    def test_success_returns_text_and_image_url(self):
+        """成功路径：眼睛返回打包图消息 → 抽出 data-url 统一出口。"""
+
+        async def scenario():
+            from backends.base import ToolCall
+
+            spine, _, _, _ = make_spine()
+
+            async def fake_look():
+                return {
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}}],
+                }
+
+            spine.vision.look_at_screen = fake_look
+            text, url = await spine.execute_tool("look_at_screen", {})
+            assert text == "已查看屏幕并将图片信息加入上下文了哦"
+            assert url == "data:image/png;base64,QUJD"
+            # openai wrapper 打包回喂消息格式（tool 消息之后插入的 extra_msg）
+            result, extra = await spine.tool_executer(ToolCall(id="1", name="look_at_screen", arguments="{}"))
+            assert result == text
+            assert extra["content"][0]["image_url"]["url"] == url
+
+        asyncio.run(scenario())
+
+    def test_not_ready_returns_text_only(self):
+        """未就绪/失败：提示文本，无图（wrapper 不产生 extra_msg）。"""
+
+        async def scenario():
+            from backends.base import ToolCall
+
+            spine, _, _, _ = make_spine()
+
+            async def fake_look():
+                return "眼睛还没准备好（截屏后端初始化中），请稍后再让我看一次。"
+
+            spine.vision.look_at_screen = fake_look
+            text, url = await spine.execute_tool("look_at_screen", {})
+            assert url is None
+            result, extra = await spine.tool_executer(ToolCall(id="1", name="look_at_screen", arguments="{}"))
+            assert "眼睛" in result
+            assert extra is None
+
+        asyncio.run(scenario())
+
+    def test_unknown_tool(self):
+        async def scenario():
+            spine, _, _, _ = make_spine()
+            text, url = await spine.execute_tool("nope", {})
+            assert "未知工具" in text and url is None
+
+        asyncio.run(scenario())
+
+    def test_tool_sink_wired(self):
+        """接线：brain.tool_sink → spine.execute_tool（AstrBot 插件远程调用入口）。"""
+        spine, _, _, _ = make_spine()
+        assert spine.brain.tool_sink == spine.execute_tool

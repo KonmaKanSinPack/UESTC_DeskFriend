@@ -69,6 +69,9 @@ class Spine:
         # 主动观察提交（astrbot 屏幕感知门控通过）：proactive 源入统一队列，
         # 响应与用户消息走同一条 do_response（2026-09-03 起替代 reply_sink 冒泡旁路）
         self.brain.observe_sink = self._on_proactive_observe
+        # 远程工具执行（AstrBot 插件经 OneBot action 调用）：转发到统一分发点，
+        # 与 openai 后端的 tool_executer 同一条执行链（2026-09-09）
+        self.brain.tool_sink = self.execute_tool
 
         # 自锁
         self.is_busy = False
@@ -154,17 +157,32 @@ class Spine:
         await self.brain.maybe_extract_facts()
 
     async def tool_executer(self, tool_call):
-        # tool_call 是统一 ToolCall 对象（openai 后端归一化而来；astrbot 后端不产生工具调用）
-        func_name = tool_call.name
-        _args_dict = parse_tool_args(tool_call.arguments)  # 目前工具都无参数，解析以备后续扩展
+        """openai 工具循环适配层：execute_tool 的结果打包成回喂 LLM 的消息格式。
 
-        if func_name == "look_at_screen":
+        tool 消息必须紧跟 assistant 的 tool_calls，截图等附加消息放在 tool 之后，
+        否则 API 判定 role 序列非法返回 400。
+        """
+        _args_dict = parse_tool_args(tool_call.arguments)  # 目前工具都无参数，解析以备后续扩展
+        text, image_url = await self.execute_tool(tool_call.name, _args_dict)
+        if image_url is None:
+            return text, None
+        return text, pack_msg("user", "image_url", image_url)
+
+    async def execute_tool(self, name, args):
+        """工具执行的**唯一分发点**：openai 工具循环与 AstrBot 插件远程调用共用。
+
+        返回 (结果文本, 图片 data-url 或 None)。新工具只在这里加分支，
+        两个后端 + AstrBot 插件即同时获得（2026-09-09 重构：此前 astrbot 后端
+        自己直调 vision，执行链有两份）。
+        """
+        if name == "look_at_screen":
             result = await self.vision.look_at_screen()
             if isinstance(result, dict):
-                # 成功：图片消息由 do_response 按序插入 context（tool 消息之后）
-                return "已查看屏幕并将图片信息加入上下文了哦", result
-            # 失败/未就绪：返回的是提示文本，直接作为工具结果
-            return result, None
+                # 眼睛返回的是已打包的图片消息，抽出 data-url 作统一出口
+                url = result["content"][0]["image_url"]["url"]
+                return "已查看屏幕并将图片信息加入上下文了哦", url
+            return result, None  # 未就绪/失败：提示文本，无图
+        return f"未知工具：{name}", None
 
     async def should_reply(self, message):
         try:

@@ -90,6 +90,9 @@ class OneBotBridge:
         self._pending_fut = None
         self._settle_task = None  # 静默窗口定时器
         self._latest_text = None  # 静默窗口内最新一条回复
+        # AstrBot 插件的远程工具处理器（backend 注册：_on_tool_action）。
+        # 桥只传话——名字到执行的映射在主控的统一工具链里
+        self.tool_handler = None
 
     @property
     def busy(self):
@@ -242,12 +245,27 @@ class OneBotBridge:
             if text:
                 self._on_reply(text)
             self._reply(req, {"message_id": random.randint(100000, 999999)})
+        elif action == "deskfriend_tool":
+            # AstrBot 插件的远程工具调用（2026-09-09）：执行在桌宠侧统一工具链。
+            # 截屏是异步 IO，丢协程跑完后按 echo 回包——call_action 正在等它
+            if self.tool_handler is None:
+                self._reply(req, {"status": "failed", "text": "桌宠未注册工具处理器"})
+            else:
+                current_loop().create_task(self._run_tool_action(req, params))
         elif action == "get_login_info":
             # AstrBot 靠这个识别 bot 身份，必须返回稳定 id
             self._reply(req, {"user_id": self.self_id, "nickname": "糯糯"})
         else:
             # 其余动作（get_friend_list 等）回 ok + 空数据，避免适配器报错
             self._reply(req, {})
+
+    async def _run_tool_action(self, req, params):
+        """执行 deskfriend_tool 并回 echo（handler 的异常在这里兜底成失败回包）。"""
+        try:
+            result = await self.tool_handler(params.get("tool", ""), params.get("args") or {})
+            self._reply(req, result)
+        except Exception as e:
+            self._reply(req, {"status": "failed", "text": f"工具执行出错：{e}"})
 
     def _reply(self, req, data):
         if self._ws is None:

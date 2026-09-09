@@ -72,6 +72,17 @@ class Brain:
         if hasattr(self.backend, "observe_sink"):
             self.backend.observe_sink = fn
 
+    @property
+    def tool_sink(self):
+        """远程工具执行回调：AstrBot 插件经 OneBot action 发来的工具调用，
+        spine 挂 execute_tool（统一分发点），astrbot 后端转发（2026-09-09）。"""
+        return getattr(self.backend, "tool_sink", None)
+
+    @tool_sink.setter
+    def tool_sink(self, fn):
+        if hasattr(self.backend, "tool_sink"):
+            self.backend.tool_sink = fn
+
     # ---- 五个接口：原样转发 ----
 
     async def get_llm_response(self, message, model=None) -> BackendResponse:

@@ -334,3 +334,73 @@ class TestIsNoReply:
     def test_real_reply_not_discarded(self):
         assert not _is_no_reply("屏幕上有新消息提醒")
         assert not _is_no_reply("无伤大雅")  # 含"无"但不是表示无话可说
+
+
+class _FakeWs:
+    """抓 _reply 回包的最小 ws(桥未 start 时 _ws 为 None,手动注入)。"""
+
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, raw):
+        self.sent.append(raw)
+
+
+class TestDeskfriendToolAction:
+    """AstrBot 插件远程工具(2026-09-09):action → tool_handler → echo 回包。"""
+
+    def test_backend_routes_action_to_tool_sink(self, backend):
+        """后端处理器:tool_sink 在 → 执行并回 ok+图;不在 → failed 文案。"""
+
+        async def scenario():
+            calls = []
+
+            async def sink(tool, args):
+                calls.append((tool, args))
+                return "看完了", "data:image/png;base64,QUJD"
+
+            backend.tool_sink = sink
+            out = await backend._on_tool_action("look_at_screen", {})
+            assert out == {"status": "ok", "text": "看完了", "image": "data:image/png;base64,QUJD"}
+            assert calls == [("look_at_screen", {})]
+
+            backend.tool_sink = None
+            out = await backend._on_tool_action("look_at_screen", {})
+            assert out["status"] == "failed"
+
+        asyncio.run(scenario())
+
+    def test_bridge_dispatches_deskfriend_tool(self, backend):
+        """真桥分支:deskfriend_tool → handler 执行 → echo 回包(call_action 在等它)。"""
+
+        async def scenario():
+            import json as _json
+
+            from onebot_bridge import OneBotBridge
+
+            ws = _FakeWs()
+            real_bridge = OneBotBridge(url="ws://fake")  # 不 start,只测 _handle 分发逻辑
+            real_bridge.tool_handler = backend._on_tool_action  # 复刻后端构造时的接线
+            real_bridge._ws = ws
+
+            async def sink(tool, args):
+                return "已查看屏幕", "data:image/png;base64,QUJD"
+
+            backend.tool_sink = sink
+            real_bridge._handle(
+                _json.dumps(
+                    {"action": "deskfriend_tool", "params": {"tool": "look_at_screen", "args": {}}, "echo": "e-123"}
+                )
+            )
+            await asyncio.sleep(0.05)  # 让 _run_tool_action 协程跑完
+            assert len(ws.sent) == 1
+            resp = _json.loads(ws.sent[0])
+            assert resp["echo"] == "e-123"
+            assert resp["status"] == "ok"
+            assert resp["data"] == {"status": "ok", "text": "已查看屏幕", "image": "data:image/png;base64,QUJD"}
+
+        asyncio.run(scenario())
+
+    def test_bridge_tool_handler_wired_by_backend(self, backend):
+        """构造接线:后端创建时把 _on_tool_action 注册进桥的 tool_handler。"""
+        assert backend.bridge.tool_handler == backend._on_tool_action
