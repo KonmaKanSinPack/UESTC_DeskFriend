@@ -1,0 +1,27 @@
+{
+  "pet_self_id": {
+    "type": "string",
+    "default": "10001",
+    "description": "桌宠伪装的 OneBot self_id(与桌宠 config/astrbot.toml 的 ASTRBOT_SELF_ID 一致)。按它识别'这条消息来自桌宠'"
+  },
+  "aiocqhttp_platform_name": {
+    "type": "string",
+    "default": "aiocqhttp",
+    "description": "aiocqhttp 适配器的平台实例名,工具经它下发 OneBot action"
+  },
+  "enable_style_injection": {
+    "type": "bool",
+    "default": true,
+    "description": "桌宠来源消息追加输出风格约束(简短聊天/禁动作描写/禁 markdown);关掉则零注入"
+  },
+  "style_addon": {
+    "type": "text",
+    "default": "\n\n[输出格式约束] 本条消息来自桌宠通道,你的回复将显示在桌面小气泡并被语音朗读:像朋友聊天一样只说简短的话(一到两句);禁止一切动作/神态/旁白描写(如 *摸摸头*、(微笑)、~趴在桌上~ 这类);禁止 markdown、列表、标题;直接说内容本身。",
+    "description": "追加到 system prompt 的约束文案(追加不替换,人格不受影响)"
+  },
+  "enable_tools": {
+    "type": "bool",
+    "default": true,
+    "description": "注册 look_at_screen 等桌宠侧工具"
+  }
+}

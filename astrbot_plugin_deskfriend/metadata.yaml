@@ -1,0 +1,7 @@
+name: astrbot_plugin_deskfriend
+display_name: DeskFriend 桌宠适配
+desc: 桌宠(UESTC_DeskFriend)通道适配——桌宠来源消息注入气泡/朗读风格约束;注册 look_at_screen 工具经 OneBot 通道调用桌宠侧统一工具链。
+version: v0.1.0
+author: shiqi-svg
+repo: https://github.com/shiqi-svg/UESTC_DeskFriend
+astrbot_version: ">=4.16,<5"
