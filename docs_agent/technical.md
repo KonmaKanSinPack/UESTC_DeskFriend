@@ -75,6 +75,12 @@ class BackendResponse:
   `boost_if_quiet`（峰值 <0.25 才等比放大）。已知限制：SenseVoice 转写无标点
   （仅喂 LLM 不朗读，链路无影响）。
 
+- **远程工具链**（2026-09-09，AstrBot 插件配套）：`spine.execute_tool(name, args)
+  -> (text, image_data-url|None)` 为工具执行**唯一分发点**（openai 的 tool_executer
+  是它的回喂打包 wrapper）。AstrBot 侧插件经 OneBot action `deskfriend_tool`
+  `{tool, args}` → 桥 `tool_handler` → astrbot 后端 `tool_sink`（brain 门面）→
+  execute_tool；回包 `{status, text, image}` 按 echo 返回。新工具只在 execute_tool
+  加分支，两个后端 + 插件同时获得。
 - **退出编排**（2026-09-03）：皮 `quit_requested`（托盘/右键菜单「退出」广播）→
   `spine._shutdown()`（幂等闩）：`brain.stop()`（结算桥在飞请求）→ `mouth.stop()`
   （停朗读 + TTS close）→ `quit_app()`（main 注入 `app.quit`，spine 零 Qt）。

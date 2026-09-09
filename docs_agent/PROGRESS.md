@@ -40,6 +40,12 @@
 - 2026-09-04（第二轮）：**PSD 直驱渲染器**——prepare_psd（拆 L/R+扩边+manifest）+
   PsdRenderer（眨眼/视线/口型/呼吸/发摆）+ skin 按 SPRITE 后缀装配；演示宠物离屏
   出帧验证通过。**等用户重发 seethrough PSD**（原件已不在本机）后跑 prepare 即换真桃桃
+- 2026-09-04（后续）：真 PSD 到位生成 21 层并切 SPRITE；agent 代跑真机验证通过
+  （修 anim_timer 创建顺序 + mapToGlobal QPointF 两 bug；DPI/后台壳两坑记档）
+- 2026-09-09：**AstrBot 适配插件**——astrbot_plugin_deskfriend（桌宠来源按 self_id
+  注入风格约束 + look_at_screen 工具）+ 桌宠侧 deskfriend_tool action 汇入
+  spine.execute_tool 唯一分发点；API 对 v4.27.2 源码核对 + SDK 4.28 导入验证。
+  **待部署家 AstrBot 真机调试**
 
 ## 待办（下一步候选，优先级自上而下）
 
