@@ -1,5 +1,7 @@
 # UESTC_DeskFriend
 
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+
 桌面 AI 伙伴（桌宠），形象为糯糯（Q版弗洛洛）。常驻桌面一隅，能听、能看、能聊：
 
 - **听觉**：麦克风常驻监听，Silero VAD（ONNX，本地模型）检测说话，faster-whisper 中文语音转文字
@@ -119,3 +121,17 @@ uv run ruff check .     # lint
 uv run ruff format .    # 格式化
 uv run pytest           # 测试
 ```
+
+## 版本记录
+
+当前版本 `0.1.0`，变更见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 安全
+
+发现安全问题请不要开公开 Issue，按 [SECURITY.md](SECURITY.md) 的流程私下报告。
+
+## License
+
+本项目采用 [GPL-3.0](LICENSE) 许可证。由于依赖 PyQt5（GPLv3 / 商业双许可），分发时请遵守 GPLv3 条款。
+
+Copyright (C) 2026 UESTC_DeskFriend contributors

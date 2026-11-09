@@ -2,6 +2,8 @@
 name = "uestc-deskfriend"
 version = "0.1.0"
 description = "桌面 AI 伙伴（桌宠）：语音交互 + 屏幕视觉 + LLM 对话"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "pyqt5>=5.15",
