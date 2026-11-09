@@ -1,9 +1,11 @@
+import win_compat  # noqa: F401  # 必须先于 PyQt5/qasync：预加载系统 MSVC 运行库
+
 import asyncio
 import math
+import tomllib
 from pathlib import Path
 
 import qasync
-import tomllib
 from PyQt5.QtCore import QPoint, QSize, Qt, QTimer
 from PyQt5.QtGui import QMovie, QPixmap
 from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget

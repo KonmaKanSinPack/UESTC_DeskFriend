@@ -9,11 +9,12 @@
 
 ## 运行环境
 
-- Linux（开发环境为 Ubuntu GNOME **Wayland**；X11 亦可，功能降级见下）
+- **Linux**（开发环境为 Ubuntu GNOME **Wayland**；X11 亦可，功能降级见下）
+- **Windows 10/11**
 - Python 3.12（由 uv 管理）
-- 可选 NVIDIA GPU（Whisper 自动检测，无显卡回退 CPU int8）
+- 可选 NVIDIA GPU（Whisper 自动检测，无显卡或 CUDA 依赖不全时回退 CPU int8）
 
-### 系统依赖
+### Linux 系统依赖
 
 ```bash
 sudo apt install -y libportaudio2 libxcb-xinerama0
@@ -25,12 +26,26 @@ sudo apt install -y python3-gi gir1.2-gstreamer-1.0 gstreamer1.0-pipewire
 - `libxcb-xinerama0`：PyQt5 xcb 插件运行库
 - gi/GStreamer 三件套：Wayland 下 PipeWire 静默截屏。缺失时回退 `gnome-screenshot`（有闪光灯效）
 
+### Windows
+
+- 无需额外系统依赖（`sounddevice` 的 Windows wheel 已内置 PortAudio）
+- 截屏使用 Pillow `ImageGrab`，支持多显示器，无需授权
+- 首次运行如弹出麦克风权限请求，请允许
+- 有 NVIDIA 显卡但未安装 CUDA/cuBLAS/cuDNN 时，Whisper 会自动回退 CPU，不影响启动
+
 ### 安装
 
+Linux（venv 必须带 `--system-site-packages`，否则用不上系统的 gi，静默截屏失效）：
+
 ```bash
-# venv 必须带 --system-site-packages，否则用不上系统的 gi（静默截屏失效）
 uv venv --system-site-packages --python 3.12
 uv sync
+```
+
+Windows（PowerShell）：
+
+```powershell
+uv sync --python 3.12
 ```
 
 ### 配置
@@ -42,6 +57,8 @@ cp config.example.toml config.toml
 # 可选：SPRITE 自定义贴图路径，支持 GIF 动图（默认 assets/nuonuo.png）
 ```
 
+Windows 下把 `cp` 换成 `Copy-Item config.example.toml config.toml`。
+
 ### 模型
 
 - VAD 模型已内置（`assets/silero_vad.onnx`），无需下载
@@ -49,7 +66,14 @@ cp config.example.toml config.toml
 - 网络不佳时用镜像下载：
 
 ```bash
+# Linux / macOS
 export HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1
+uv run python -c "from faster_whisper import WhisperModel; WhisperModel('small', device='cpu', compute_type='int8')"
+```
+
+```powershell
+# Windows PowerShell
+$env:HF_ENDPOINT="https://hf-mirror.com"; $env:HF_HUB_DISABLE_XET="1"
 uv run python -c "from faster_whisper import WhisperModel; WhisperModel('small', device='cpu', compute_type='int8')"
 ```
 
@@ -59,7 +83,9 @@ uv run python -c "from faster_whisper import WhisperModel; WhisperModel('small',
 uv run python main.py
 ```
 
-首次运行会弹一次 GNOME 屏幕共享授权框（PipeWire 截屏），点允许后永久静默，授权 token 存于 `pw_restore_token`（删除该文件可重新授权）。`Ctrl+C` 退出。
+Linux 首次运行会弹一次 GNOME 屏幕共享授权框（PipeWire 截屏），点允许后永久静默，授权 token 存于 `pw_restore_token`（删除该文件可重新授权）。Windows 无此步骤。
+
+`Ctrl+C` 退出；Windows 也可以直接从任务栏关闭窗口。若不想保留终端窗口，可用 `.venv\Scripts\pythonw.exe main.py` 启动（此时从任务栏关闭）。
 
 ## 玩法
 
@@ -76,13 +102,14 @@ uv run python main.py
 ```
 main.py        # 入口（Qt + asyncio 事件循环装配）
 brain.py       # LLM 通信、消息打包、工具参数解析
-vision.py      # 截屏（Wayland PipeWire → gnome-screenshot → X11 ImageGrab）
+vision.py      # 截屏（Windows ImageGrab；Wayland PipeWire → gnome-screenshot → X11 ImageGrab）
 listen.py      # VAD 语音检测 + Whisper 转写
 ui.py          # DeskFriend 窗口：气泡、输入框、动画、消息调度
 pw_capture.py  # Wayland 静默截屏后端（ScreenCast Portal + PipeWire + GStreamer）
+win_compat.py  # Windows 启动兼容（预加载系统 MSVC 运行库）
 assets/        # 贴图 + VAD 模型
 tests/         # pytest 用例
-DEVELOPMENT.md # 开发文档：技术决策、路线图、验收标准
+docs/DEVELOPMENT.md # 开发文档：技术决策、路线图、验收标准
 ```
 
 ## 开发

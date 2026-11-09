@@ -2,6 +2,7 @@ import base64
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections import deque
 from io import BytesIO
@@ -78,6 +79,9 @@ def grab_screenshot():
                 return img.copy()
         finally:
             os.unlink(tmp.name)
+    if sys.platform == "win32":
+        # Windows 走 GDI 截屏；all_screens=True 覆盖多显示器组成的虚拟桌面
+        return ImageGrab.grab(all_screens=True)
     return ImageGrab.grab()
 
 
