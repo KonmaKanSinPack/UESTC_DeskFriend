@@ -29,7 +29,7 @@
 
 ## 2. 总体目标
 
-在 **Ubuntu (GNOME / Wayland)** 上让桌宠完整可用：能听、能看、能以气泡形式回复，代码结构可持续演进。暂不做 Rust 迁移（理由：本项目是 LLM 编排器，瓶颈在推理后端与网络，Python 胶水层非性能瓶颈；分发需求出现前不重写）。
+在 **Ubuntu (GNOME / Wayland)** 与 **Windows 10/11** 上让桌宠完整可用：能听、能看、能以气泡形式回复，代码结构可持续演进。暂不做 Rust 迁移（理由：本项目是 LLM 编排器，瓶颈在推理后端与网络，Python 胶水层非性能瓶颈；分发需求出现前不重写）。
 
 ## 3. 技术决策（已确定）
 
@@ -44,6 +44,7 @@
 9. **遗忘策略 = 轮次截断 + LLM 增量摘要**：超出轮次上限的老历史不硬丢，由 LLM 滚动生成摘要注入上下文（上下文 = system + facts + 摘要 + 最近 N 轮）。
 10. **长期记忆用事实表 + LLM 抽取**：`facts` 表存结构化事实（如"用户在 UESTC 读书"），抽取/去重/更新/删除全部交给 LLM 输出 JSON 操作完成，不写自研相似度去重；facts 量小，全量注入 system prompt，不做检索。
 11. **语义检索走降级路线**：优先 SQLite FTS5 关键词检索（内置、零依赖）；embedding top-k 仅列为远期候选（端点支持则用 API，否则本地小模型），不在初期目标内。
+12. **Windows 兼容**：截屏走 Pillow `ImageGrab(all_screens=True)`；`pyqt5-qt5` 固定 5.15.2（最后一个提供 Windows wheel 的版本）；Whisper CUDA 初始化失败时回退 CPU int8；配置文件按项目目录定位，避免快捷方式启动时找不到；Windows 下启用 Qt 高 DPI 缩放。
 
 ## 4. 分阶段任务
 
@@ -97,6 +98,22 @@
 - [ ] （远期候选）embedding top-k 检索：端点支持 embedding 则用 API，否则本地 bge-small-zh
 - 验收：翻旧账类问题（"我上次说的那本书叫什么"）能答对
 
+### Phase 8 — Windows 兼容
+- [x] 截屏：Windows 走 `ImageGrab(all_screens=True)`，支持多显示器
+- [x] 依赖：`pyqt5-qt5==5.15.2; sys_platform == 'win32'`，解决新版无 Windows wheel 的问题
+- [x] `requires-python` 统一为 `>=3.12`（`onnxruntime` 与 `tomllib` 的实际要求）
+- [x] Whisper：CUDA 初始化失败（缺 cuBLAS/cuDNN）时回退 CPU int8
+- [x] 配置路径基于项目目录，支持从快捷方式/其他工作目录启动
+- [x] Windows 下启用 Qt5 高 DPI 缩放
+- [x] README 增加 Windows 安装、运行与镜像下载说明
+- [ ] 真机端到端验收（语音 → LLM → 气泡；需自备 API Key）
+
+### Phase 9 — 开源发布
+- [x] 采用 GPL-3.0 许可证（与 PyQt5 的 GPLv3 许可兼容）
+- [x] 增加 `SECURITY.md`，提供 GitHub 私密漏洞报告流程
+- [x] 增加 `CHANGELOG.md`，整理 `v0.1.0` 发布说明
+- [ ] 上游合并后由维护者在上游仓库发布 `v0.1.0` Release
+
 ## 5. 验收标准（总任务完成定义）
 
 1. 在 GNOME Wayland 会话中运行，语音说一句话 → 桌宠气泡给出回复，全程不依赖终端输出。
@@ -107,7 +124,7 @@
 ## 6. 非目标（本阶段不做）
 
 - Rust 重写
-- 多平台（Windows/macOS）适配
+- macOS 适配（Windows 已于 Phase 8 支持）
 - 引入外部 Agent 框架（如 AstrBot）：记忆系统自研，见技术决策 8
 - 向量数据库 / embedding 检索（仅 Phase 7 远期候选）
 - TTS 语音合成（可列为远期候选）

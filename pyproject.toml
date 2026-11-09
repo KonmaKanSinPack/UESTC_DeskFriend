@@ -2,7 +2,9 @@
 name = "uestc-deskfriend"
 version = "0.1.0"
 description = "桌面 AI 伙伴（桌宠）：语音交互 + 屏幕视觉 + LLM 对话"
-requires-python = ">=3.10"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
 dependencies = [
     "pyqt5>=5.15",
     "qasync>=0.27",
@@ -21,14 +23,21 @@ dev = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# win_compat 必须在 PyQt5 之前导入，不能按字母序重排
+"main.py" = ["I001"]
+"ui.py" = ["I001"]
+
 [tool.uv]
 package = false
+# PyQt5-Qt5 5.15.2 是最后一个提供 Windows wheel 的版本，新版仅覆盖 Linux/macOS。
+constraint-dependencies = ["pyqt5-qt5==5.15.2; sys_platform == 'win32'"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

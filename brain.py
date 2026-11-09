@@ -1,6 +1,7 @@
 import json
-
 import tomllib
+from pathlib import Path
+
 from openai import AsyncOpenAI
 
 from memory import KEEP_RECENT_TURNS, MAX_CONTEXT_TURNS, MemoryStore, render_messages
@@ -85,7 +86,8 @@ class Brain:
     def __init__(self, client=None, db_path=None):
         """client / db_path 可注入，仅供测试；生产路径从 config.toml 与默认 pet.db 构建。"""
         if client is None:
-            with open("config.toml", "rb") as f:
+            # 相对当前工作目录读取会在快捷方式/其他目录启动时找不到配置，改为项目目录
+            with open(Path(__file__).parent / "config.toml", "rb") as f:
                 config = tomllib.load(f)
             client = AsyncOpenAI(api_key=config["API_KEY"], base_url=config["BASE_URL"])
             self.system_prompt = config.get("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)

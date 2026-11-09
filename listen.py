@@ -73,14 +73,26 @@ class Listen(QObject):
             device, compute_type = "cpu", "int8"
         print(f"Whisper 推理设备：{device} ({compute_type})")
         try:
-            # 优先离线加载本地缓存：在线模式即使模型已缓存也会先连 HF 校验，
-            # 网络不通时会卡死在 TCP 连接上
-            self.whisper_model = WhisperModel("small", device=device, compute_type=compute_type, local_files_only=True)
-        except Exception:
-            print("本地未找到 Whisper 模型缓存，转为在线下载...")
-            self.whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
+            self.whisper_model = self._load_whisper(device, compute_type)
+        except Exception as e:
+            if device != "cuda":
+                raise
+            # Windows 常见情况：有 NVIDIA 显卡/驱动，但没装 cuBLAS/cuDNN，
+            # CUDA 初始化会失败；此时静默回退到 CPU，避免整个程序起不来。
+            print(f"CUDA 推理不可用（{e}），回退 CPU int8")
+            self.whisper_model = self._load_whisper("cpu", "int8")
 
         self.start_threading()
+
+    @staticmethod
+    def _load_whisper(device, compute_type):
+        try:
+            # 优先离线加载本地缓存：在线模式即使模型已缓存也会先连 HF 校验，
+            # 网络不通时会卡死在 TCP 连接上
+            return WhisperModel("small", device=device, compute_type=compute_type, local_files_only=True)
+        except FileNotFoundError:
+            print("本地未找到 Whisper 模型缓存，转为在线下载...")
+            return WhisperModel("small", device=device, compute_type=compute_type)
 
     def start_threading(self):
         # daemon=True意思是：这个线程是个守护线程，主线程结束了它也会跟着结束，不会阻碍程序退出。
